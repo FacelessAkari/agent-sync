@@ -1,0 +1,13 @@
+/data/
+/.agent-sync/
+.env
+.env.*
+/keys/
+*.key
+*.pem
+/build/
+/dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+/.venv/
