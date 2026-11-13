@@ -23,7 +23,9 @@ class CLIEncodingTests(unittest.TestCase):
         # Keep pipes binary: validate the actual bytes, not the parent's locale.
         return subprocess.run(
             [sys.executable, *args], cwd=ROOT, env=env,
-            capture_output=True, shell=False, timeout=15,
+            # Pipe stdin too: a Windows console ignores PYTHONIOENCODING for its
+            # interactive input stream, unlike the three pipes under test.
+            input=b'', capture_output=True, shell=False, timeout=15,
         )
 
     def test_help_utf8_under_cp1252(self):
