@@ -1,4 +1,4 @@
-# 三期：聊天归档与受支持的上下文恢复
+# 聊天归档与受支持的上下文恢复
 
 主入口：`python -m agent_sync --repo CONTENT history ...`；独立入口 `python -m agent_sync.history --repo CONTENT ...` 保持可用。CONTENT 应已初始化；创建档案时校验 manifest 的保留命名空间并复用 `.agent-sync/lock`，不修改绑定、项目任务记录，也不自动推送。`.agent-sync/` 必须保持本机状态、不加入版本控制。
 

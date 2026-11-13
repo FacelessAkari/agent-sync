@@ -69,7 +69,7 @@ python -m agent_sync --repo CONTENT git-sync
 
 ## Git 设置
 
-使用独立私人远端和普通 clone。凭证通过 SSH 或系统凭证管理器配置，不将 token 放进远端 URL。初次设置示例：
+使用独立 GitHub 私有资料仓库和普通 clone。Git 传输可用 SSH 或 HTTPS；私有属性核验使用 GitHub HTTPS 凭证管理器或 GH_TOKEN/GITHUB_TOKEN 环境变量。程序上传前实时查询固定官方 API，公开或无法核实时停止，不将 token 放进远端 URL。初次设置示例：
 
 ```sh
 git -C CONTENT init -b main
@@ -92,9 +92,9 @@ git -C CONTENT push -u origin main
 
 已有暂存改动、未完成合并、detached HEAD、非白名单已跟踪改动或被跟踪的 `.agent-sync` 都会拒绝。其他未跟踪文件不提交、不删除。执行 fetch、检查远端内容、提交本地允许的改动、merge、非强制 push；合并冲突时 abort 并保留两侧提交。失败后检查 `git status`，不假定操作已全部撤销。
 
-## 二期：项目、任务与交接
+## 项目、任务与交接
 
-二期不归档聊天、不读取原生会话、不自动续聊。项目代码在每个项目自己的 Git 仓库中传输，不复制项目目录或 `.git` 到内容仓库。
+项目代码在每个项目自己的 Git 仓库中传输。内容仓库保存项目登记、任务与交接记录；聊天归档使用下文的 `history` 命令。
 
 共享布局：
 
@@ -112,7 +112,7 @@ data/handoffs/<id>/summary.md  同一交接的 Markdown 表示
 
 ### 项目
 
-首次 clone、认证和 upstream 由用户手动设置。HTTPS URL 不得内嵌凭证、query 或 fragment；也支持 `git@host:owner/repo.git`。项目 id 使用一期组名同样的安全命名规则。
+首次 clone、认证和 upstream 由用户手动设置。HTTPS URL 不得内嵌凭证、query 或 fragment；也支持 `git@host:owner/repo.git`。项目 id 使用知识组名同样的安全命名规则。
 
 ```sh
 git clone git@example.com:owner/demo.git /absolute/projects/demo
@@ -129,7 +129,7 @@ python -m agent_sync --repo CONTENT project sync demo
 
 执行顺序为 fetch 指定分支 → 检查双边分叉 → `merge --ff-only --no-autostash` → 非 force push。显式指定传输 refspec，不采用 remote 中额外配置的 fetch/push refspec，不自动创建提交、reset、stash 或 rebase。已有明确本地提交可以推送；双边分叉需用户手工处理。fetch 或 merge 已成功而 push 失败时不回退已完成步骤，检查状态后重试。运行期间停止编辑及其他 Git 操作；本地锁不约束编辑器或手工 Git。
 
-Win/Mac 必须使用完全相同的登记远端字符串；不自动互换 HTTPS/SSH，也不将不同 URL 判为同一仓库。内容与项目 Git 传输仅允许 https/ssh/file，不因 localhost 测试开放 http。环境中的 Git 仓库、索引、对象目录和 CONFIG_PARAMETERS/COUNT/KEY_*/VALUE_* 注入会被剥离，本机凭证助手保留。也接受绝对本地 bare 路径，**仅用于离线测试，不是跨设备远端方案**。没有自动 clone 子命令。项目 Git hooks 在自动操作期间禁用；本机 Git 配置、凭证助手和过滤器仍是信任边界，不是沙箱。
+Win/Mac 必须使用完全相同的登记远端字符串；不自动互换 HTTPS/SSH，也不将不同 URL 判为同一仓库。项目 Git 传输仅允许 https/ssh/file，不因 localhost 测试开放 http。资料内容网络目标进一步限定为可经官方 API 核实的 GitHub 私有仓库；获取与上传地址必须相同。环境中的 Git 仓库、索引、对象目录和 CONFIG_PARAMETERS/COUNT/KEY_*/VALUE_* 注入会被剥离，本机凭证助手保留。也接受绝对本地 bare 路径，**仅用于离线测试，不是跨设备远端方案**。没有自动 clone 子命令。项目 Git hooks 在自动操作期间禁用；本机 Git 配置、凭证助手和过滤器仍是信任边界，不是沙箱。
 
 ### 任务
 
@@ -162,7 +162,7 @@ python -m agent_sync --repo CONTENT git-sync
 
 任务事件先落盘、快照后落盘不是跨文件断电事务；中断可能留下尚未应用的事件，可据事件和 Git 历史人工恢复，不应删除证据。交接在 `.agent-sync/handoff-staging/` 下以 UUID 和普通 mkdir 独占创建目录，继承 ACL/umask，不 chmod、不修改系统权限；同文件系统内重命名发布并清理失败暂存目录；中断前的临时目录可以在确认无运行实例后清理。不可变性是本 CLI 的写入约束，不是文件系统 WORM 或防篡改签名。
 
-## 三期：可见历史归档与文本上下文恢复
+## 可见历史归档与文本上下文恢复
 
 两个稳定入口等价：`python -m agent_sync --repo CONTENT history ...` 与 `python -m agent_sync.history --repo CONTENT ...`。`--max-bytes` 放在 history 的动作之前。完整格式、命令配置与限制见 [历史详解](history.md)。
 
@@ -200,7 +200,7 @@ python -m agent_sync --repo CONTENT history export ARCHIVE_ID --kind markdown --
 | DeepSeek DSH | 默认 profile 示例 `~/.dsh/AGENTS.md`；自定义 DSH_HOME 时使用该 profile 的 AGENTS.md | 多 profile 分别绑定，升级后复核实际读取来源 |
 | Antigravity | 本文只选 `~/.gemini/config/rules/AGENTS.md` 作为规则入口 | 避免在 `~/.gemini/AGENTS.md` 同时放置重复规则；安装版本须核对实际读取来源 |
 
-学姐、哈基米、鲸鲸的人设分别登记，不自动合成。鱼鱼也保持独立。鲸鲸与鱼鱼不能同时写入同一个 DSH 规则文件，可分别指定 `DSH_HOME=~/.dsh-whale` 和 `DSH_HOME=~/.dsh-fish`；这仅说明规则路径选择，不承诺其他内部状态或技能目录全面隔离。DSH 路径依据已提供的 `0.1.0-rc.6` 本机核实信息，升级后应复核。
+各助手或 profile 的人设分别登记，不自动合成。不同 profile 使用独立规则文件；例如分别指定 `DSH_HOME=~/.dsh-profile-a` 和 `DSH_HOME=~/.dsh-profile-b`。这仅说明规则路径选择，不承诺其他内部状态或技能目录全面隔离。每台设备应核对已安装版本实际使用的路径。
 
 公共知识可绑定到约定目录 `~/AgentSyncKnowledge`，各人设规则分别引用。可使用以下指引：
 

@@ -299,13 +299,35 @@ class GitTests(unittest.TestCase):
         self.assertFalse((self.b / "data/knowledge/auth.json").exists())
         self.assertEqual(self.git(self.b, "diff", "--cached", "--name-only").stdout, b"")
 
-    def test_push_failure_is_not_success_and_keeps_local_commit(self):
-        # A nonexistent local push destination needs no network and guarantees failure.
+    def test_mismatched_push_url_rejected_before_commit(self):
         self.git(self.a, "remote", "set-url", "--push", "origin", str(self.root / "missing.git"))
+        self.assert_precommit_rejected(self.a)
+        self.assertEqual(
+            (self.a / "data/knowledge/pending.md").read_bytes(),
+            b"must remain uncommitted\n",
+        )
+
+    def test_push_failure_is_not_success_and_keeps_local_commit(self):
+        from unittest.mock import patch
+        from agent_sync import gitops
+
+        original_git = gitops._git
+
+        def fail_push(repo, args, label, allowed=(0,)):
+            if args[0] == "push":
+                raise core.Error("模拟 push 传输失败")
+            return original_git(repo, args, label, allowed)
+
+        local_head = self.git(self.a, "rev-parse", "HEAD").stdout
+        remote_head = self.git(self.remote, "rev-parse", "HEAD").stdout
         put(self.a / "data/knowledge/pending.md", "pending\n")
-        with self.assertRaisesRegex(core.Error, "push"):
-            git_sync(self.a)
+        # Keep matching local URLs and all validation/fetch/commit/merge steps real.
+        with patch.object(gitops, "_git", side_effect=fail_push):
+            with self.assertRaisesRegex(core.Error, "^模拟 push 传输失败$"):
+                git_sync(self.a)
+        self.assertNotEqual(self.git(self.a, "rev-parse", "HEAD").stdout, local_head)
         self.assertEqual(self.git(self.a, "show", "HEAD:data/knowledge/pending.md").stdout, b"pending\n")
+        self.assertEqual(self.git(self.remote, "rev-parse", "HEAD").stdout, remote_head)
         self.assertEqual(self.git(self.a, "status", "--porcelain").stdout, b"")
 
 

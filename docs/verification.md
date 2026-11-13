@@ -24,13 +24,13 @@
 
 ## 实际参与者与独立测试
 
-生产实现和主要修复由通过 moonton-llm 调用的实际 `gpt-6-astra` 完成。主协调方负责落盘、集成、测试执行、报告和发布；测试替身的 Windows UTF-8 设置、版本和文档校对由协调方完成。
+生产实现和主要修复由通过外部模型接口调用的实际 `gpt-6-astra` 完成。主协调方负责落盘、集成、测试执行、报告和发布；测试替身的 Windows UTF-8 设置、版本和文档校对由协调方完成。
 
-Antigravity（哈基米）通过真实 `agy` CLI 独立运行预发布的一、二期测试和复现场景。她的非提权环境为 38 项通过、1 项符号链接权限错误、1 项跳过，不能视为全量通过。她复现的命名空间重叠、孤立绑定、autocrlf、缓存、Git 环境污染和交接分支问题均已进入修复与最终回归；严格真实路径、NFC 名称和 exact remote identity 作为明确契约保留。
+Antigravity通过真实 `agy` CLI 独立运行预发布的一、二期测试和复现场景。该工具的非提权环境为 38 项通过、1 项符号链接权限错误、1 项跳过，不能视为全量通过。该工具复现的命名空间重叠、孤立绑定、autocrlf、缓存、Git 环境污染和交接分支问题均已进入修复与最终回归；严格真实路径、NFC 名称和 exact remote identity 作为明确契约保留。
 
-DeepSeek Harness（鲸鲸）通过真实 headless 会话独立执行：10/10 CLI 场景、4/4 Git 预检，以及 localhost HTTP Git 双 clone 的 22/24 检查。两项非通过均指向同一个 bootstrap 忽略规则缺陷，已修复并覆盖回归。她的三期离线测试为 16/16；项目/交接 smoke 在测试 ACL 适配后通过。她的完整套件受 Windows 沙箱 tempfile/Git 限制，不能计为全量通过。最终产品传输允许 HTTPS/SSH/file；该 HTTP 服务只用于预发布独立测试，未开放为产品同步协议。
+DeepSeek Harness通过真实 headless 会话独立执行：10/10 CLI 场景、4/4 Git 预检，以及 localhost HTTP Git 双 clone 的 22/24 检查。两项非通过均指向同一个 bootstrap 忽略规则缺陷，已修复并覆盖回归。该工具的三期离线测试为 16/16；项目/交接 smoke 在测试 ACL 适配后通过。该工具的完整套件受 Windows 沙箱 tempfile/Git 限制，不能计为全量通过。最终产品传输允许 HTTPS/SSH/file；该 HTTP 服务只用于预发布独立测试，未开放为产品同步协议。
 
-两位均核查了本机 CLI/已安装文档与接口：AGY 和 DSH 的按 ID 续接依赖已有本机会话，未找到受支持的外部历史导入及跨 Windows/macOS 同 ID 迁移接口。因此当前产品提供归档与可读 Markdown 交接，不直接改写两者内部数据库或会话文件。
+两个工具均核查了本机 CLI/已安装文档与接口：AGY 和 DSH 的按 ID 续接依赖已有本机会话，未找到受支持的外部历史导入及跨 Windows/macOS 同 ID 迁移接口。因此当前产品提供归档与可读 Markdown 交接，不直接改写两者内部数据库或会话文件。
 
 ## 验证范围
 

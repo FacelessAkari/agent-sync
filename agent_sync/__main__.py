@@ -9,14 +9,22 @@ from .gitops import git_sync
 def main(argv=None):
     core.configure_stdio()
     # Parse only the global prefix; the positional remainder is forwarded verbatim.
-    # In particular, history --help and --max-bytes belong to history.main.
+    # History and schedule own their subcommands and trailing options.
     route = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    route.add_argument("--repo", default=".")
+    route.add_argument("--repo", default=None)
     route.add_argument("tail", nargs=argparse.REMAINDER)
     prefix, unknown = route.parse_known_args(argv)
     if prefix.tail and prefix.tail[0] == "history" and not unknown:
         from .history import main as history_main
-        return history_main(["--repo", prefix.repo, *prefix.tail[1:]])
+        return history_main(["--repo", "." if prefix.repo is None else prefix.repo,
+                             *prefix.tail[1:]])
+    if prefix.tail and prefix.tail[0] == "schedule" and not unknown:
+        from .scheduler import main as scheduler_main
+        tail = list(prefix.tail[1:])
+        if prefix.repo is not None and not any(
+                token == '--repo' or token.startswith('--repo=') for token in tail):
+            tail.extend(['--repo', prefix.repo])
+        return scheduler_main(tail)
     parser = argparse.ArgumentParser(
         prog="agent_sync",
         description="显式同步知识、项目代码、任务和交接；不发现个人资料或迁移原生会话。",
@@ -43,7 +51,15 @@ def main(argv=None):
     apply = command(sub, "apply")
     apply.add_argument("--direction", required=True, choices=["push", "pull"])
     command(sub, "git-sync")
+    quick = command(sub, "quick-sync")
+    quick.add_argument('--workspace', required=True)
+    quick.add_argument('--check', action='store_true')
+    shortcut = command(sub, "shortcut")
+    shortcut.add_argument('--workspace', required=True)
+    shortcut.add_argument('--platform', choices=['auto', 'windows', 'macos'], default='auto')
+    shortcut.add_argument('--output')
     command(sub, "history", help="可见历史分页归档与文本上下文恢复（history --help）")
+    command(sub, "schedule", help="安装、查看或移除助手计划任务（schedule --help）")
 
     project = command(sub, "project").add_subparsers(dest="action", required=True)
     add = command(project, "add")
@@ -82,6 +98,11 @@ def main(argv=None):
     command(handoff, "show").add_argument("id")
 
     args = parser.parse_args(argv)
+    if args.command in {'quick-sync', 'shortcut'}:
+        tokens = list(sys.argv[1:] if argv is None else argv)
+        before_command = tokens[:tokens.index(args.command)]
+        if not any(token == '--repo' or token.startswith('--repo=') for token in before_command):
+            parser.error('quick-sync/shortcut 必须明确指定 --repo')
     try:
         if args.command == "init":
             core.init_repo(args.repo)
@@ -100,6 +121,14 @@ def main(argv=None):
             result = core.apply(args.repo, args.direction)
         elif args.command == "git-sync":
             result = git_sync(args.repo)
+        elif args.command == 'quick-sync':
+            from .local_bridge import run
+            result, code = run(args.workspace, args.repo, check=args.check)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return code
+        elif args.command == 'shortcut':
+            from .shortcut import create
+            result = create(args.workspace, args.repo, args.platform, args.output)
         elif args.command == "project":
             if args.action == "add":
                 result = projects.add(args.repo, args.id, args.remote, args.branch)

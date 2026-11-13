@@ -11,3 +11,10 @@
 __pycache__/
 *.py[cod]
 /.venv/
+/work/
+/outputs/
+/collect/
+/selection.json
+/device.json
+/baseline.json
+*.log

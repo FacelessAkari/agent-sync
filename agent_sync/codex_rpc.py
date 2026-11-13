@@ -1,6 +1,7 @@
 """Bounded, serial, newline-delimited JSON-RPC for a local Codex app-server."""
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import shutil
@@ -106,7 +107,8 @@ class RPC:
         try:
             self.process = subprocess.Popen(
                 self.argv, shell=False, stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             self.reader = threading.Thread(target=self._read_loop, daemon=True)
             self.reader.start()
             self.call('initialize', {'clientInfo': {

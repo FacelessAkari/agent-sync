@@ -47,7 +47,7 @@ class SyncTests(unittest.TestCase):
             ("rules", "rules", "file", "data/rules.md", "AGENTS.md", "共同规则"),
             ("skills", "skills", "tree", "data/skills", "skills", None),
             ("memory", "memory", "tree", "data/memory", "memory", None),
-            ("persona", "personas", "file", "data/personas/whale.md", "whale/AGENTS.md", "鲸鲸示例人设"),
+            ("persona", "personas", "file", "data/personas/whale.md", "whale/AGENTS.md", "助手示例人设"),
         ]
         for name, category, kind, relative, binding, text in specs:
             core.add_group(self.repo, name, category, kind, relative)

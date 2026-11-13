@@ -8,7 +8,7 @@
 
 ## 开始前的三条基本约定
 
-先安装 Python 3.11+ 和 Git，确认终端能运行 `python --version`（Mac 通常用 `python3 --version`）和 `git --version`。工具源码仓库目前也是私有仓库，克隆时需要相应的 GitHub 访问权限。
+先安装 Python 3.11+ 和 Git，确认终端能运行 `python --version`（Mac 通常用 `python3 --version`）和 `git --version`。工具源码仓库是公开项目，可以直接克隆；你用于保存规则、技能、记忆和对话的资料仓库必须单独创建为私有仓库。
 
 1. **运行同步命令前，进入 `agent-sync` 工具源码目录**
    本指南采用直接运行源码的方式，无需把 AgentSync 安装到系统全局环境。每次执行 `python -m agent_sync` 前，先进入克隆下来的工具源码目录。也可以把本页步骤交给 AI 助手，让它在终端代为执行。
@@ -23,10 +23,10 @@
 
 ## 第一步：在 GitHub 创建空白的私有资料仓库
 
-1. 登录 GitHub（或其他兼容的标准 Git 托管平台），新建一个名为 `my-agent-data` 的仓库。
+1. 登录 GitHub，新建一个名为 `my-agent-data` 的仓库。
 2. 将可见性设为 **Private（私有）**。
 3. 本指南按**空仓库首次推送**操作：创建时不添加 `README`、`.gitignore` 或 `LICENSE`。AgentSync 会在本机生成所需的保护与跨平台换行规则文件。
-4. 准备好本机 Git 访问该私有仓库的权限（推荐使用 SSH 密钥，或系统自带的 Git 凭证管理器）。**切勿使用把密码或个人 Token 直接写进网址的远端 URL。**
+4. 准备好本机 Git 访问该私有仓库的权限。上传前的私有属性核验使用系统 Git 凭证管理器已有的 GitHub HTTPS 凭证，或 `GH_TOKEN` / `GITHUB_TOKEN` 环境变量；只配置 SSH 密钥时仍需补其中一种 API 凭证。**切勿使用把密码或个人 Token 直接写进网址的远端 URL。**
 
 ---
 
@@ -191,3 +191,17 @@ python -m agent_sync --repo "CONTENT" git-sync
 3. **逐步扩展更多能力**
    - 同步整个技能文件夹（`--kind tree`）、为不同助手保留各自独立的人设、建立公共 Markdown 长期记忆目录（如 `~/AgentSyncKnowledge`），以及登记业务项目 Git 同步、任务与工作交接：请查看 [命令与技术参考](reference.md)。
    - 归档公开可见的聊天记录、导出 Markdown 会话交接单或向新 Codex 会话恢复受支持的文本上下文：请查看 [历史归档与能力边界](history.md)。
+
+
+## 完成绑定后：生成快捷入口与每小时同步
+
+再准备一个位于源码目录和资料仓库之外的独立本机工作区 `LOCAL`，在程序目录运行：
+
+```sh
+python -m agent_sync --repo "CONTENT" shortcut --workspace "LOCAL"
+python -m agent_sync --repo "CONTENT" schedule install --workspace "LOCAL"
+```
+
+Mac 将 `python` 换为 `python3`。默认每小时运行一次；各台设备都要使用自己的路径生成入口和安装任务。本机工作区保存选择清单、镜像、运行结果和状态，不提交到公开程序仓库。
+
+直接绑定的规则、人设图片和 Markdown 记忆可以沿用本机绑定。技能需要逐机配置已审阅的选择清单，生成的空模板不表示技能已经接入。详细说明见[快捷入口](shortcuts.md)和[定时同步](scheduling.md)。

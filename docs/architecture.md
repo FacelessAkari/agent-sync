@@ -1,4 +1,4 @@
-# AgentSync 0.3.1 架构与契约
+# AgentSync 0.4.0 架构与契约
 
 ## 仓库与状态
 
@@ -12,13 +12,23 @@ add/bind 只登记，plan 只比较；apply push 为绑定到内容工作树，p
 
 拒绝祖先及目标 symlink、junction/reparse point、硬链接文件、特殊文件，检查跨平台名称及允许类型。锁只约束本程序，不防御有权限的并发编辑或恶意替换；运行时停止相关编辑和 Git 操作。
 
+## 本机快捷入口与私有目标
+
+公开程序、资料仓库和本机工作区互不嵌套。collector 只读显式选择的真实技能源，允许源为普通硬链接，输出独立普通副本；不自动扫描主目录或写回原技能。local_bridge 在私有核验后持有工作区 quick-sync.lock，贯穿选定来源刷新、收集、计划及上传；已有锁返回 busy，不自动删除。只读检查不创建锁、不刷新对话来源。
+
+无变化路径仍核对实际内容、绑定摘要、Git 状态和远端 HEAD；单次读取按 inode 去重，不使用跨运行 mtime 捷径。原始技能、普通镜像、数据仓库与基线一致时可跳过完整 plan/apply/git-sync。远端新提交、已有待推提交或镜像独立修改需人工处理。直接绑定的已有资料改动可通过 core 应用；技能原件不自动安装。
+
+private_remote 在快捷同步、入口生成与所有内容 git-sync 上传前核验目标。网络目标限 GitHub，固定官方 API 核验 private=true 和仓库身份，拒绝重定向、多个目标、不同 push URL 或地址重写。令牌来自环境或现有非交互 Git 凭证管理器，仅存内存；失败即停止，不改变仓库可见性。本地绝对路径/file Git 保留离线能力，UNC 与其他网络远端不视为私有资料目标。项目代码同步仍使用其独立项目仓库契约。
+
+shortcut 仅生成本机入口和缺失的空选择模板，先检查目标私有性及路径隔离；既有文件内容不同则拒绝覆盖。入口保存当前设备 Python、Git、程序位置与本机工作区路径，不含用户资料或凭证。scheduler 调用同一 local_bridge 管线，来源刷新只处理本机显式来源清单。
+
 ## Git 与共享记录
 
 内容 git-sync：本地完整验证 → Git 状态检查 → HEAD 提交树检查 → fetch → upstream 提交树检查 → 暂存/提交 manifest.json 和 data/ → merge → 再次完整验证 → 非 force push。HEAD/upstream 均须跟踪 bootstrap .gitignore，明确包含独立行 /.agent-sync/，其后不得有否定规则。全局 excludes、info/exclude 或未提交工作树文件不是 bootstrap 证明；程序不代提交 bootstrap。
 
 拒绝预先暂存、未完成 Git 操作、detached HEAD、已跟踪本机状态或非白名单改动。合并失败尽力 abort，保留已有提交；push 失败不谎报成功。Git 配置、过滤器、凭证助手及远端仍属信任边界，不是沙箱。
 
-项目 sync 要求登记 remote/branch 与本机配置一致且工作树干净；fetch 后只允许 fast-forward，再非 force push，不创建代码提交、reset、stash 或 rebase。project status 只读返回实际 branch/head/clean、registered_branch 和本机可 sync 原因；sync 的严格匹配不放松，远端字符串不做 HTTPS/SSH 等价转换。任务快照必须匹配不可变事件，交接 JSON 必须匹配派生 Markdown 和引用任务历史；新交接保存 branch/registered_branch，兼容旧 head/clean。二期文件输入统一 CRLF/CR 为 LF，三期原始字节不变。交接 staging 使用自有目录下 UUID + 普通 mkdir 继承 ACL，不 chmod，保持同 FS 重命名发布和失败清理。验证文字只代表用户输入。
+项目 sync 要求登记 remote/branch 与本机配置一致且工作树干净；fetch 后只允许 fast-forward，再非 force push，不创建代码提交、reset、stash 或 rebase。project status 只读返回实际 branch/head/clean、registered_branch 和本机可 sync 原因；sync 的严格匹配不放松，远端字符串不做 HTTPS/SSH 等价转换。任务快照必须匹配不可变事件，交接 JSON 必须匹配派生 Markdown 和引用任务历史；交接保存 branch/registered_branch，也接受仅含 head/clean 的记录。任务与交接文件输入统一 CRLF/CR 为 LF，历史档案的原始字节不变。交接 staging 使用自有目录下 UUID + 普通 mkdir 继承 ACL，不 chmod，保持同 FS 重命名发布和失败清理。验证文字只代表用户输入。
 
 records.validate_shared 由调用者持锁，内部不取锁：检查 manifest、历史包目录/原始输入/record/派生 Markdown 的完整性和哈希，再检查项目任务交接。无 history 目录是正常空集合。合并后的语义错误阻止 push，保留现场供人工检查。
 

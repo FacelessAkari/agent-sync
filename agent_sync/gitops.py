@@ -3,23 +3,17 @@ import os
 from pathlib import Path
 import subprocess
 
-from . import core
+from . import core, private_remote
 
 
 def _git(repo, args, label, allowed=(0,)):
-    # Preserve local credential helpers, not repository/index/config injection.
-    blocked = {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
-               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-               "GIT_NAMESPACE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}
-    env = {k: v for k, v in os.environ.items()
-           if k not in blocked and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
-    env.update(GIT_TERMINAL_PROMPT="0", GIT_MERGE_AUTOEDIT="no",
-               GIT_ALLOW_PROTOCOL="https:ssh:file")
+    env = private_remote.git_environment()
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args], shell=False,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
             env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise core.Error("Git 步骤无法完成: " + label + "；请手动检查 Git/凭证/网络，不回显命令错误正文") from exc
@@ -115,6 +109,26 @@ def _byte_rules(repo, paths):
                 raise core.Error("保字节规则未生效或存在 filter/encoding/eol/ident 覆盖；请手工审查 Git attributes")
 
 
+def _stageable(repo, paths):
+    """Read-only coverage check; tracked files may legitimately match ignore rules.
+
+    Query Git on every invocation, rather than caching ignore configuration:
+    core.excludesFile contents can change without any config change.
+    Callers supply safely scanned files or validated prospective file paths,
+    never cache entries or whole directories.
+    """
+    names = sorted(set(paths))
+    _validate_names(names)
+    tracked = set(_paths(repo, ["ls-files", "-z"], "检查候选文件跟踪状态"))
+    untracked = [name for name in names if name not in tracked]
+    for offset in range(0, len(untracked), 64):
+        result = _git(repo, ["check-ignore", "--no-index", "--",
+                             *untracked[offset:offset + 64]],
+                      "检查受管文件的标准忽略规则", (0, 1))
+        if result.returncode == 0:
+            raise core.Error("受管内容尚未跟踪且被 Git 忽略；请手工修正忽略规则后重试，不强制暂存")
+
+
 def _git_path(repo, name):
     raw = _text(repo, ["rev-parse", "--git-path", name], "检查 Git 操作状态")
     path = Path(raw)
@@ -125,9 +139,10 @@ def git_sync(repo):
     from .records import validate_shared
 
     repo = core._safe(repo)
+    target = private_remote.require_private(repo)
     with core._lock(repo):
         core._load(repo)
-        core._scan_tree(repo / "data")
+        data_files = core._scan_tree(repo / "data")
         validate_shared(repo)
         root = core._abs(_text(repo, ["rev-parse", "--show-toplevel"], "确认内容仓库根目录"))
         if root != repo:
@@ -147,6 +162,7 @@ def git_sync(repo):
         if any(not _allowed(path) for path in dirty):
             raise core.Error("存在非白名单已跟踪改动；仅允许 manifest.json 和 data/")
         _validate_names(dirty)
+        _stageable(repo, {"manifest.json"} | {"data/" + p for p in data_files})
         ignored = _git(repo, ["check-ignore", "--no-index", "-q", ".agent-sync/device.json"], "确认本地状态被忽略", (0, 1))
         if ignored.returncode:
             raise core.Error("必须先在 .gitignore 中忽略 /.agent-sync/，并手动提交 bootstrap .gitignore")
@@ -158,6 +174,7 @@ def git_sync(repo):
             raise core.Error("首版仅支持标准命名 remote 和远端分支 upstream")
         # Validate existing history too; tracked state must never become a transfer candidate.
         _tree(repo, "HEAD")
+        private_remote.require_private(repo, remote, expected=target)
         _git(repo, ["fetch", "--", remote], "fetch upstream")
         _tree(repo, upstream)
         different = _paths(repo, ["diff", "--name-only", "-z", "HEAD", upstream, "--"], "检查远端修改范围")
@@ -173,6 +190,7 @@ def git_sync(repo):
                             | {"data/" + p for p in core._scan_tree(repo / "data")}
                             | {p for p in tracked if p.startswith("data/")})
         _validate_names(candidates)
+        _stageable(repo, candidates)
         _byte_rules(repo, candidates)
         # Never stage a whole directory: ignored scan entries cannot become Git input,
         # even if local exclude configuration is changed between checks.
@@ -197,5 +215,7 @@ def git_sync(repo):
         core._scan_tree(repo / "data")
         validate_shared(repo)
         _tree(repo, "HEAD")
+        private_remote.require_private(repo, remote, expected=target)
         _git(repo, ["push", "--", remote, "HEAD:" + merge_ref], "非强制 push upstream")
-        return {"status": "pushed", "note": "只暂存 manifest.json 和 data/；未执行本机内容 apply"}
+        return {"status": "pushed", "visibility": target['visibility'],
+                "note": "只暂存 manifest.json 和 data/；未执行本机内容 apply"}
