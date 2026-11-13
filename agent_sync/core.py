@@ -30,6 +30,7 @@ MANAGED_SHARED = frozenset('data/' + name for name in (
 EXTENSIONS = {
     ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".ps1", ".sh",
     ".js", ".mjs", ".cjs", ".ts", ".png", ".jpg", ".jpeg", ".webp", ".svg",
+    ".html", ".htm", ".jsx", ".tsx", ".xml", ".gif",
 }
 DENIED = {
     "auth.json", "config.local.json", "credentials", "credential", "tokens.json",
@@ -123,7 +124,7 @@ def _names(relative, file=False):
     if not isinstance(relative, str) or not relative or chr(92) in relative:
         raise Error("路径必须是非空 POSIX 相对路径")
     parts = relative.split("/")
-    for part in parts:
+    for index, part in enumerate(parts):
         low = part.casefold()
         if (not part or part in {".", ".."} or part.startswith(".")
                 or part.endswith((" ", "."))
@@ -131,7 +132,9 @@ def _names(relative, file=False):
                 or unicodedata.normalize("NFC", part) != part
                 or low.split(".")[0] in RESERVED
                 or low in DENIED
-                or low.startswith(("credentials", "credential.", "secret", "auth."))):
+                or low.startswith(("credentials", "credential.", "secret"))
+                or (low.startswith("auth.")
+                    and not (file and index == len(parts) - 1 and low == "auth.md"))):
             raise Error("不允许的跨平台/敏感/运行时名称: " + relative)
     if file and Path(parts[-1]).suffix.casefold() not in EXTENSIONS:
         raise Error("文件类型不在白名单: " + relative)

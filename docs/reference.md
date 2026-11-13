@@ -221,11 +221,12 @@ preferences.md 和 memory/index.md，再按索引读取相关事实。
 
 ```text
 .md .txt .json .yaml .yml .toml
-.py .ps1 .sh .js .mjs .cjs .ts
-.png .jpg .jpeg .webp .svg
+.py .ps1 .sh .js .mjs .cjs .ts .jsx .tsx
+.html .htm .xml
+.png .jpg .jpeg .webp .svg .gif
 ```
 
-树扫描按精确名称忽略 `__pycache__` 缓存项、`.DS_Store` 和 `*.pyc`，在读取/跟随链接前跳过，不进入计划文件项或 baseline；缓存目录内容不审阅、不传输。已被 Git 跟踪的缓存会拒绝，需手工从索引移除而保留本机文件。`.env`、auth、密钥等其他拒绝规则不变；这不是自动 secret scanner。脚本和图片只作为字节复制，不执行、渲染或验证其功能。其他类型仍拒绝。整个 `data/` 都需通过检查；点开头、敏感和运行时名称、越界路径、Windows 保留名称、大小写碰撞及非 NFC 名称仍被拒绝。
+树扫描按精确名称忽略 `__pycache__` 缓存项、`.DS_Store` 和 `*.pyc`，在读取/跟随链接前跳过，不进入计划文件项或 baseline；缓存目录内容不审阅、不传输。已被 Git 跟踪的缓存会拒绝，需手工从索引移除而保留本机文件。`auth.md` 仅作为路径最后一段的普通文档文件允许（不区分大小写）；同名目录及其他 `auth.*` 名称仍拒绝。`.env`、凭证、密钥和运行时名称拒绝；这不是自动 secret scanner。脚本、网页、组件、XML 和图片只作为字节复制，不执行、渲染或验证其功能。其他类型仍拒绝。整个 `data/` 都需通过检查；点开头、敏感和运行时名称、越界路径、Windows 保留名称、大小写碰撞及非 NFC 名称仍被拒绝。
 
 生产路径检查拒绝符号链接、junction/reparse point（包括祖先）、硬链接文件和特殊文件，不跟随目录链接。使用直接真实目录，不宣称支持挂载目录、云占位符或链接绕过。macOS 临时根应先由用户/测试夹具取得 realpath 后的 `/private/...` 路径，再传给程序；生产校验不会自动 resolve 来绕过链接。名称必须为 NFC。只同步字节，不同步权限、ACL、资源分叉或可执行位。白名单不是密钥扫描器，也不是恶意脚本或指令检测器；提交前需审阅内容。
 
