@@ -38,9 +38,9 @@ class SyncTests(unittest.TestCase):
 
     def test_help(self):
         result = subprocess.run([sys.executable, "-m", "agent_sync", "--help"],
-                                capture_output=True, shell=False)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn(b"git-sync", result.stdout)
+                                capture_output=True, shell=False, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("git-sync", result.stdout)
 
     def test_two_devices_rules_skills_memory_persona(self):
         specs = [

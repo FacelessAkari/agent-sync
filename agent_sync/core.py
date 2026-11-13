@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 import unicodedata
 import uuid
@@ -12,6 +13,14 @@ import uuid
 
 class Error(Exception):
     pass
+
+
+def configure_stdio():
+    """Configure CLI text outputs in place; leave stdin and redirected StringIO alone."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 CATEGORIES = {"rules", "skills", "personas", "memory"}

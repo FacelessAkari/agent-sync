@@ -7,6 +7,7 @@ from .gitops import git_sync
 
 
 def main(argv=None):
+    core.configure_stdio()
     # Parse only the global prefix; the positional remainder is forwarded verbatim.
     # In particular, history --help and --max-bytes belong to history.main.
     route = argparse.ArgumentParser(add_help=False, allow_abbrev=False)

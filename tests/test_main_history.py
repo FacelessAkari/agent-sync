@@ -42,9 +42,10 @@ class MainHistoryTests(unittest.TestCase):
                 result = subprocess.run(
                     [sys.executable, '-m', module, '--repo', str(repo), *tail],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
+                    text=True, encoding='utf-8',
                     cwd=Path(__file__).resolve().parents[1],
                 )
-                self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+                self.assertEqual(result.returncode, 0, result.stderr)
                 value = json.loads(result.stdout)
                 if tail[-1] == 'list':
                     self.assertEqual(value, [])

@@ -11,7 +11,7 @@ import re
 import sys
 import uuid
 
-from .core import Error, _atomic, _groups, _ignored_cache, _json, _lock, _mkdir, _safe
+from .core import Error, _atomic, _groups, _ignored_cache, _json, _lock, _mkdir, _safe, configure_stdio
 from .codex_rpc import DEFAULT_LIMIT, RPC, bounded_read, command_argv, json_bytes, json_loads
 
 
@@ -719,6 +719,7 @@ def parser():
 
 
 def main(argv=None):
+    configure_stdio()
     args = parser().parse_args(argv)
     try:
         repo = _safe(args.repo)

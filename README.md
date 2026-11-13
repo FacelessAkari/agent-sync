@@ -14,7 +14,7 @@ AgentSync 0.3.0 是使用 Python 3.11+ 标准库和系统 Git 的显式同步 CL
 python -m agent_sync --help
 ```
 
-macOS 通常使用 `python3`；Windows 也可使用 `py -3.11`。`--repo` 必须放在子命令之前。
+macOS 通常使用 `python3`；Windows 也可使用 `py -3.11`。`--repo` 必须放在子命令之前。CLI 的标准输出和错误输出统一使用 UTF-8，重定向或由其他程序读取时也按 UTF-8 解码。
 
 下面使用独立示例路径。将 `CONTENT` 替换为私人内容仓库路径，将绑定路径替换为本机实际绝对路径：
 

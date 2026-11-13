@@ -2,9 +2,10 @@
 
 验证日期：2026-11-13。发布版本：0.3.0。
 
-## 最终代码验证
+## 代码验证
 
-- Windows 本机管理员环境：Python 3.12.4、Git 2.56.0.windows.4，执行 `python -X utf8 scripts/run_tests.py`，**83 项全部通过，0 skipped**，耗时 286.606 秒。入口先创建真实文件和目录符号链接，缺少权限直接失败。
+- Windows 本机管理员环境的完整基线：Python 3.12.4、Git 2.56.0.windows.4，执行 `python -X utf8 scripts/run_tests.py`，**83 项全部通过，0 skipped**，耗时 286.606 秒。入口先创建真实文件和目录符号链接，缺少权限直接失败。
+- 英文 Windows 的 cp1252 管道问题已修复为 CLI 统一 UTF-8 输出；新增 6 项回归，与两个入口及原有帮助检查合计 10 项本机复测全部通过。当前完整套件共 89 项，由下述双平台 CI 执行。
 - 覆盖首次绑定、三方冲突与备份、双 clone 同步与失败保留、孤立绑定清理、保留命名空间、任务与交接、真实 autocrlf 克隆、缓存忽略、历史原始字节和哈希、Codex RPC 分页/恢复/拒绝权限请求/超时回收。
 - Python wheel 隔离构建通过；运行不需要第三方 Python 包。版本元数据与模块版本一致。
 - [GitHub Actions](https://github.com/FacelessAkari/agent-sync/actions) 在 Windows/macOS、Python 3.12 上执行同一零跳过入口。每次远端执行状态和日志以对应提交的 Actions 结果为准。
