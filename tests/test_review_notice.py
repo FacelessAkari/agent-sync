@@ -30,7 +30,7 @@ class ReviewNoticeTests(unittest.TestCase):
             self.assertEqual(notify(self.repo, [], None), 'clear')
             self.assertFalse(self.state.exists())
             self.assertEqual(notify(self.repo, self.rows, self.signature), 'sent')
-            self.assertEqual(send.call_args_list, [mock.call(1)] * 3)
+            self.assertEqual(send.call_args_list, [mock.call(1, self.state.with_name('pending.txt'))] * 3)
 
     def test_disabled_or_timed_out_notifications_retry_and_corrupt_state_recovers(self):
         errors = [False, subprocess.TimeoutExpired('test', 1), True, True]
@@ -45,7 +45,7 @@ class ReviewNoticeTests(unittest.TestCase):
             runner.return_value.returncode = 0
             with mock.patch.object(review_notice.sys, 'platform', 'win32'), \
                  mock.patch.dict(review_notice.os.environ, {'SystemRoot': 'C:/Windows'}):
-                self.assertTrue(review_notice._deliver(12))
+                self.assertTrue(review_notice._deliver(12, self.state.with_name('pending.txt')))
             args = runner.call_args.args[0]
             self.assertTrue(args[0].replace('\\', '/').endswith('System32/WindowsPowerShell/v1.0/powershell.exe'))
             script = base64.b64decode(args[-1]).decode('utf-16le')
@@ -54,11 +54,11 @@ class ReviewNoticeTests(unittest.TestCase):
             self.assertNotIn(self.rows[0]['path'], script)
             self.assertFalse(runner.call_args.kwargs['shell'])
             with mock.patch.object(review_notice.sys, 'platform', 'darwin'):
-                self.assertTrue(review_notice._deliver(12))
+                self.assertTrue(review_notice._deliver(12, self.state.with_name('pending.txt')))
             args = runner.call_args.args[0]
             self.assertEqual(args[:2], ['/usr/bin/osascript', '-e'])
             self.assertEqual(args[-1], '12')
             self.assertNotIn(self.rows[0]['path'], args[2])
             runner.return_value.returncode = 2
             with mock.patch.object(review_notice.sys, 'platform', 'darwin'):
-                self.assertFalse(review_notice._deliver(12))
+                self.assertFalse(review_notice._deliver(12, self.state.with_name('pending.txt')))
