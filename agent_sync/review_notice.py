@@ -9,7 +9,7 @@ import sys
 from . import core
 
 
-_WINDOWS = r"""
+_WINDOWS_IDENTITY = r"""
 $ErrorActionPreference = 'Stop'
 $id = 'AgentSync.LocalSync.Review'
 Add-Type -TypeDefinition @'
@@ -50,7 +50,8 @@ public static class AgentSyncIdentity {
 [AgentSyncIdentity]::SetCurrentProcessExplicitAppUserModelID($id)
 $instance = $env:AGENT_SYNC_REVIEW_INSTANCE
 if ($instance -notmatch '^[0-9a-f]{16}$') { exit 2 }
-$folder = Join-Path ([Environment]::GetFolderPath('Programs')) 'AgentSync'
+"""
+_WINDOWS_SHORTCUT = r"""
 $null = [IO.Directory]::CreateDirectory($folder)
 $linkPath = Join-Path $folder ('AgentSync 待确认清单 - ' + $instance + '.lnk')
 $editor = Join-Path $env:SystemRoot 'System32\notepad.exe'
@@ -74,6 +75,9 @@ $link = $wsh.CreateShortcut($linkPath)
 if ($link.TargetPath -ne $editor -or $link.Arguments -ne $arguments) { exit 2 }
 $shellFolder = (New-Object -ComObject Shell.Application).NameSpace($folder)
 if ($shellFolder.ParseName([IO.Path]::GetFileName($linkPath)).ExtendedProperty('System.AppUserModel.ID') -ne $id) { exit 2 }
+"""
+_WINDOWS = (_WINDOWS_IDENTITY + "\n$folder = Join-Path ([Environment]::GetFolderPath('Programs')) 'AgentSync'\n"
+            + _WINDOWS_SHORTCUT) + r"""
 # A click opens one fixed local report. No URI-supplied argument enters the command.
 $scheme = 'agentsync-review-' + $instance
 $command = '"' + $editor + '" ' + $arguments
@@ -98,8 +102,12 @@ if ($null -eq $existing) {
 }
 $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Classes\AppUserModelId\' + $id)
 try {
-    $key.SetValue('DisplayName', 'AgentSync', [Microsoft.Win32.RegistryValueKind]::String)
-    $key.SetValue('ShowInSettings', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+    if ($null -eq $key.GetValue('DisplayName')) {
+        $key.SetValue('DisplayName', 'AgentSync', [Microsoft.Win32.RegistryValueKind]::String)
+    }
+    if ($null -eq $key.GetValue('ShowInSettings')) {
+        $key.SetValue('ShowInSettings', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+    }
 } finally { $key.Dispose() }
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
 $null = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime]

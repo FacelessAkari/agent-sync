@@ -1,6 +1,8 @@
 import base64
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -46,6 +48,11 @@ class ReviewNoticeTests(unittest.TestCase):
             with mock.patch.object(review_notice.sys, 'platform', 'win32'), \
                  mock.patch.dict(review_notice.os.environ, {'SystemRoot': 'C:/Windows'}):
                 self.assertTrue(review_notice._deliver(12, self.state.with_name('pending.txt')))
+                first = runner.call_args.kwargs['env']['AGENT_SYNC_REVIEW_INSTANCE']
+                self.assertTrue(review_notice._deliver(12, self.repo / 'other' / 'pending.txt'))
+                second = runner.call_args.kwargs['env']['AGENT_SYNC_REVIEW_INSTANCE']
+                self.assertNotEqual(first, second)
+                self.assertRegex(first, r'^[0-9a-f]{16}$')
             args = runner.call_args.args[0]
             self.assertTrue(args[0].replace('\\', '/').endswith('System32/WindowsPowerShell/v1.0/powershell.exe'))
             script = base64.b64decode(args[-1]).decode('utf-16le')
@@ -62,3 +69,32 @@ class ReviewNoticeTests(unittest.TestCase):
             runner.return_value.returncode = 2
             with mock.patch.object(review_notice.sys, 'platform', 'darwin'):
                 self.assertFalse(review_notice._deliver(12, self.state.with_name('pending.txt')))
+
+    if sys.platform == 'win32':
+        def test_foreign_shortcut_is_preserved(self):
+            # Exercise the actual COM link on a temporary directory; no OS registration or toast.
+            programs = self.repo / 'test-programs'
+            programs.mkdir()
+            instance = '1234567890abcdef'
+            script = """
+$folder = $env:AGENT_SYNC_TEST_PROGRAMS
+$path = Join-Path $folder ('AgentSync 待确认清单 - ' + $env:AGENT_SYNC_REVIEW_INSTANCE + '.lnk')
+$sample = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
+$sample.TargetPath = Join-Path $env:SystemRoot 'System32\\notepad.exe'
+$sample.Arguments = '"other report.txt"'
+$sample.Save()
+"""
+            args = [str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+                    '-NoProfile', '-NonInteractive', '-EncodedCommand']
+            env = dict(os.environ, AGENT_SYNC_TEST_PROGRAMS=str(programs),
+                       AGENT_SYNC_REVIEW_INSTANCE=instance, AGENT_SYNC_REVIEW_REPORT=str(self.state.with_name('pending.txt')))
+            def run(source):
+                encoded = base64.b64encode(source.encode('utf-16le')).decode('ascii')
+                return subprocess.run([*args, encoded], capture_output=True, timeout=20, env=env,
+                                      creationflags=subprocess.CREATE_NO_WINDOW).returncode
+            self.assertEqual(run(script), 0)
+            shortcut = next(programs.glob('*.lnk'))
+            before = shortcut.read_bytes()
+            self.assertEqual(run(review_notice._WINDOWS_IDENTITY + '\n$folder = $env:AGENT_SYNC_TEST_PROGRAMS\n'
+                                 + review_notice._WINDOWS_SHORTCUT), 2)
+            self.assertEqual(shortcut.read_bytes(), before)
