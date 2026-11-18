@@ -15,6 +15,8 @@ $id = 'AgentSync.LocalSync.Review'
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Text;
 public static class AgentSyncIdentity {
     [StructLayout(LayoutKind.Sequential)] struct Key { public Guid format; public uint id; }
     [StructLayout(LayoutKind.Explicit, Size=24)] struct Value {
@@ -28,22 +30,60 @@ public static class AgentSyncIdentity {
         void SetValue(ref Key key, ref Value value);
         void Commit();
     }
-    [DllImport("shell32.dll", CharSet=CharSet.Unicode, PreserveSig=false)]
-    static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr context, uint flags,
-        ref Guid interfaceId, [MarshalAs(UnmanagedType.Interface)] out Store store);
-    [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
-    static extern void SHChangeNotify(uint change, uint flags, string path, IntPtr unused);
+    [ComImport, Guid("00021401-0000-0000-C000-000000000046")] class ShellLink {}
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface LinkW {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, IntPtr findData, uint flags);
+        void GetIDList(out IntPtr pidl);
+        void SetIDList(IntPtr pidl);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int capacity);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder args, int capacity);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string args);
+        void GetHotkey(out short key);
+        void SetHotkey(short key);
+        void GetShowCmd(out int cmd);
+        void SetShowCmd(int cmd);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr hwnd, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref Value value);
     [DllImport("shell32.dll", CharSet=CharSet.Unicode, PreserveSig=false)]
     public static extern void SetCurrentProcessExplicitAppUserModelID(string id);
-    public static void SetShortcut(string path, string id) {
-        Guid guid = typeof(Store).GUID;
-        Store store;
-        SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, 2, ref guid, out store);
-        Key key = new Key { format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), id = 5 };
-        Value value = new Value { type = 31, text = Marshal.StringToCoTaskMemUni(id) };
-        try { store.SetValue(ref key, ref value); store.Commit(); }
-        finally { Marshal.FreeCoTaskMem(value.text); Marshal.FinalReleaseComObject(store); }
-        SHChangeNotify(0x2000, 0x1005, path, IntPtr.Zero);
+    static Key appId = new Key { format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), id = 5 };
+    public static void CreateShortcut(string path, string target, string args, string id) {
+        object raw = new ShellLink();
+        try {
+            LinkW link = (LinkW)raw;
+            link.SetPath(target);
+            link.SetArguments(args);
+            link.SetDescription("查看本机 AgentSync 需要确认的文件");
+            Store properties = (Store)raw;
+            Value value = new Value { type = 31, text = Marshal.StringToCoTaskMemUni(id) };
+            try { properties.SetValue(ref appId, ref value); properties.Commit(); }
+            finally { PropVariantClear(ref value); }
+            ((IPersistFile)raw).Save(path, true);
+        } finally { Marshal.FinalReleaseComObject(raw); }
+    }
+    public static bool MatchesShortcut(string path, string target, string args, string id) {
+        object raw = new ShellLink();
+        try {
+            ((IPersistFile)raw).Load(path, 0);
+            LinkW link = (LinkW)raw;
+            StringBuilder actualTarget = new StringBuilder(32768), actualArgs = new StringBuilder(32768);
+            link.GetPath(actualTarget, actualTarget.Capacity, IntPtr.Zero, 0);
+            link.GetArguments(actualArgs, actualArgs.Capacity);
+            Value value;
+            ((Store)raw).GetValue(ref appId, out value);
+            try { return String.Equals(actualTarget.ToString(), target, StringComparison.OrdinalIgnoreCase)
+                && actualArgs.ToString() == args && value.type == 31 && Marshal.PtrToStringUni(value.text) == id; }
+            finally { PropVariantClear(ref value); }
+        } finally { Marshal.FinalReleaseComObject(raw); }
     }
 }
 '@
@@ -56,25 +96,16 @@ $null = [IO.Directory]::CreateDirectory($folder)
 $linkPath = Join-Path $folder ('AgentSync 待确认清单 - ' + $instance + '.lnk')
 $editor = Join-Path $env:SystemRoot 'System32\notepad.exe'
 $arguments = '"' + $env:AGENT_SYNC_REVIEW_REPORT + '"'
-$wsh = New-Object -ComObject WScript.Shell
 if (-not (Test-Path -LiteralPath $linkPath)) {
     $temporary = Join-Path $folder ([Guid]::NewGuid().ToString('N') + '.lnk')
     try {
-        $link = $wsh.CreateShortcut($temporary)
-        $link.TargetPath = $editor
-        $link.Arguments = $arguments
-        $link.Description = '查看本机 AgentSync 需要确认的文件'
-        $link.Save()
-        [AgentSyncIdentity]::SetShortcut($temporary, $id)
+        [AgentSyncIdentity]::CreateShortcut($temporary, $editor, $arguments, $id)
         [IO.File]::Move($temporary, $linkPath)
     } finally {
         if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
     }
 }
-$link = $wsh.CreateShortcut($linkPath)
-if ($link.TargetPath -ne $editor -or $link.Arguments -ne $arguments) { exit 2 }
-$shellFolder = (New-Object -ComObject Shell.Application).NameSpace($folder)
-if ($shellFolder.ParseName([IO.Path]::GetFileName($linkPath)).ExtendedProperty('System.AppUserModel.ID') -ne $id) { exit 2 }
+if (-not [AgentSyncIdentity]::MatchesShortcut($linkPath, $editor, $arguments, $id)) { exit 2 }
 """
 _WINDOWS = (_WINDOWS_IDENTITY + "\n$folder = Join-Path ([Environment]::GetFolderPath('Programs')) 'AgentSync'\n"
             + _WINDOWS_SHORTCUT) + r"""

@@ -73,28 +73,35 @@ class ReviewNoticeTests(unittest.TestCase):
     if sys.platform == 'win32':
         def test_foreign_shortcut_is_preserved(self):
             # Exercise the actual COM link on a temporary directory; no OS registration or toast.
-            programs = self.repo / 'test-programs'
+            programs = self.repo / '测试 programs'
             programs.mkdir()
             instance = '1234567890abcdef'
-            script = """
+            script = review_notice._WINDOWS_IDENTITY + r"""
 $folder = $env:AGENT_SYNC_TEST_PROGRAMS
 $path = Join-Path $folder ('AgentSync 待确认清单 - ' + $env:AGENT_SYNC_REVIEW_INSTANCE + '.lnk')
-$sample = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
-$sample.TargetPath = Join-Path $env:SystemRoot 'System32\\notepad.exe'
-$sample.Arguments = '"other report.txt"'
-$sample.Save()
+$target = Join-Path $PSHOME 'powershell.exe'
+$arguments = '"另一份 report.txt"'
+[AgentSyncIdentity]::CreateShortcut($path, $target, $arguments, 'Example.Foreign')
+if (-not [AgentSyncIdentity]::MatchesShortcut($path, $target, $arguments, 'Example.Foreign')) {
+    throw 'The synthetic Unicode shell link failed its native readback.'
+}
 """
             args = [str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'),
                     '-NoProfile', '-NonInteractive', '-EncodedCommand']
             env = dict(os.environ, AGENT_SYNC_TEST_PROGRAMS=str(programs),
                        AGENT_SYNC_REVIEW_INSTANCE=instance, AGENT_SYNC_REVIEW_REPORT=str(self.state.with_name('pending.txt')))
-            def run(source):
-                encoded = base64.b64encode(source.encode('utf-16le')).decode('ascii')
-                return subprocess.run([*args, encoded], capture_output=True, timeout=20, env=env,
-                                      creationflags=subprocess.CREATE_NO_WINDOW).returncode
-            self.assertEqual(run(script), 0)
+            def run(source, expected):
+                diagnostics = ("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n"
+                               "$ProgressPreference = 'SilentlyContinue'\n$ErrorActionPreference = 'Stop'\n"
+                               "try {\n" + source + "\n} catch { [Console]::Error.WriteLine("
+                               "$_.Exception.GetBaseException().Message + ' at ' + $_.InvocationInfo.PositionMessage); exit 1 }")
+                encoded = base64.b64encode(diagnostics.encode('utf-16le')).decode('ascii')
+                result = subprocess.run([*args, encoded], capture_output=True, timeout=20, env=env,
+                                        creationflags=subprocess.CREATE_NO_WINDOW)
+                self.assertEqual(result.returncode, expected, result.stderr.decode('utf-8', errors='replace'))
+            run(script, 0)
             shortcut = next(programs.glob('*.lnk'))
             before = shortcut.read_bytes()
-            self.assertEqual(run(review_notice._WINDOWS_IDENTITY + '\n$folder = $env:AGENT_SYNC_TEST_PROGRAMS\n'
-                                 + review_notice._WINDOWS_SHORTCUT), 2)
+            run(review_notice._WINDOWS_IDENTITY + '\n$folder = $env:AGENT_SYNC_TEST_PROGRAMS\n'
+                + review_notice._WINDOWS_SHORTCUT, 2)
             self.assertEqual(shortcut.read_bytes(), before)
