@@ -483,31 +483,41 @@ def _target(root, relative):
     return root if relative == "" else root.joinpath(*relative.split("/"))
 
 
-def apply(repo, direction):
-    if direction not in {"push", "pull"}:
+def apply(repo, direction, *, scope=None, expected=None, identity=None):
+    """Apply a full one-way plan or an exact, preflighted set of independent files."""
+    if direction not in {"push", "pull"} and not (direction == "both" and scope is not None):
         raise Error("direction 必须为 push 或 pull")
     repo = _safe(repo)
     with _lock(repo):
         groups, bindings, baseline = _load(repo)
         rows, snapshots = _collect(repo, groups, bindings, baseline)
+        scoped_groups = None
+        if scope is not None:
+            if snapshots != expected or (groups, bindings) != identity:
+                raise Error("部分同步的计划或绑定已变化，请重试")
+            rows = [row for row in rows if (row["group"], row["path"]) in scope]
+            if len(rows) != len(scope) or any(row["action"] not in {"unchanged", "push", "pull"} for row in rows):
+                raise Error("部分同步只允许已确认的独立文件")
+            scoped_groups = {name for name, _ in scope}
         if any(row["action"] == "conflict" for row in rows):
             raise Error("发现冲突：整批未写入；运行 plan 并手工合并两端，禁止用首次绑定覆盖历史内容")
         by_name = {g["name"]: g for g in groups}
         operations = []
         for row in rows:
-            if row["action"] != direction:
+            action = row["action"]
+            if action not in {"push", "pull"} or direction not in {"both", action}:
                 continue
             name, relative = row["group"], row["path"]
             remote_root = repo / by_name[name]["path"]
             local_root = Path(bindings[name])
-            source_root, destination_root = (local_root, remote_root) if direction == "push" else (remote_root, local_root)
+            source_root, destination_root = (local_root, remote_root) if action == "push" else (remote_root, local_root)
             source = _target(source_root, relative)
             destination = _target(destination_root, relative)
             data, old = _bytes(source), _bytes(destination)
             remote, local, base = snapshots[name]
-            expected = local.get(relative) if direction == "push" else remote.get(relative)
-            expected_old = remote.get(relative) if direction == "push" else local.get(relative)
-            if data is None or _digest(data) != expected or _digest(old) != expected_old:
+            expected_data = local.get(relative) if action == "push" else remote.get(relative)
+            expected_old = remote.get(relative) if action == "push" else local.get(relative)
+            if data is None or _digest(data) != expected_data or _digest(old) != expected_old:
                 raise Error("预检后内容变化，请停止编辑后重试")
             operations.append((name, relative, destination, data, old))
         transaction = repo / ".agent-sync/backups" / ("txn-" + uuid.uuid4().hex)
@@ -522,6 +532,8 @@ def apply(repo, direction):
             _save(transaction / "index.json", journal)
         if _collect(repo, groups, bindings, baseline)[1] != snapshots:
             raise Error("备份期间内容变化：未写入同步目标，请重新 plan")
+        if scope is not None and _load(repo) != (groups, bindings, baseline):
+            raise Error("备份期间绑定或基线已变化")
         completed = []
         try:
             for name, relative, destination, data, old in operations:
@@ -531,12 +543,22 @@ def apply(repo, direction):
                 completed.append((destination, data, old))
             new_baseline = dict(baseline)
             for name, (remote, local, base) in snapshots.items():
+                if scoped_groups is not None and name not in scoped_groups:
+                    continue
                 remote, local = dict(remote), dict(local)
                 for op_name, relative, destination, data, old in operations:
                     if op_name == name:
-                        (remote if direction == "push" else local)[relative] = _digest(data)
+                        remote[relative] = local[relative] = _digest(data)
                 common = dict(base)
                 for relative in remote.keys() | local.keys() | base.keys():
+                    if scope is not None:
+                        if (name, relative) not in scope:
+                            continue
+                        repo_file = _target(repo / by_name[name]["path"], relative)
+                        bound_file = _target(Path(bindings[name]), relative)
+                        if (_digest(_bytes(repo_file)) != remote.get(relative)
+                                or _digest(_bytes(bound_file)) != local.get(relative)):
+                            raise Error("更新基线前内容发生变化")
                     if remote.get(relative) == local.get(relative):
                         if remote.get(relative) is None:
                             common.pop(relative, None)

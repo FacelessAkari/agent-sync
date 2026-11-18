@@ -41,7 +41,8 @@ def source_bytes(path):
     return data
 
 
-def collect(config, mirror, state_file, check_only=False):
+def collect(config, mirror, state_file, check_only=False, *, subset=None,
+            expected_state=None, expected_mirror=None):
     mirror, state_file = core._safe(mirror), core._safe(state_file)
     if core._overlap(mirror, state_file):
         raise ValueError('Mirror overlaps collection state')
@@ -66,6 +67,10 @@ def collect(config, mirror, state_file, check_only=False):
     if len(set(names)) != len(names):
         raise ValueError('Duplicate mirror destination')
     core._case_check(names)
+    if subset is not None and (not isinstance(subset, dict) or subset.keys() - set(names)
+            or any(not isinstance(value, str) or not core.HASH.fullmatch(value) for value in subset.values())
+            or not isinstance(expected_state, dict) or not isinstance(expected_mirror, dict)):
+        raise ValueError('Invalid pinned collection subset')
     raw_state = core._bytes(state_file)
     state = json.loads(raw_state) if raw_state is not None else {}
     if not isinstance(state, dict):
@@ -75,10 +80,14 @@ def collect(config, mirror, state_file, check_only=False):
         if not isinstance(value, str) or not core.HASH.fullmatch(value):
             raise ValueError('Invalid collection digest')
     core._case_check(list(state))
+    if subset is not None and state != expected_state:
+        raise ValueError('Collection state changed since partial plan')
     operations = []
-    next_state = {}
+    next_state = state.copy() if subset is not None else {}
     for item in config['files']:
         rel = item['mirror']
+        if subset is not None and rel not in subset:
+            continue
         core._names(rel, file=True)
         source = Path(item['source'])
         data = source_bytes(source)
@@ -86,6 +95,8 @@ def collect(config, mirror, state_file, check_only=False):
         destination = core._safe(mirror.joinpath(*rel.split('/')))
         previous = core._bytes(destination)
         old_hash = core._digest(previous)
+        if subset is not None and (digest != subset[rel] or old_hash != expected_mirror.get(rel)):
+            raise ValueError('Source or mirror changed since partial plan')
         base = state.get(rel)
         if previous != data and old_hash != base:
             raise ValueError('Mirror has an independent change; resolve before collecting: ' + rel)
@@ -103,16 +114,23 @@ def collect(config, mirror, state_file, check_only=False):
         written = []
         try:
             for destination, data, old in operations:
+                if core._bytes(destination) != old:
+                    raise ValueError('Mirror changed before collection completed')
                 core._atomic(destination, data)
-                written.append((destination, old))
-            core._atomic(state_file, (json.dumps(next_state, indent=2) + '\n').encode())
+                written.append((destination, old, data))
+            if core._bytes(state_file) != raw_state:
+                raise ValueError('Collection state changed before collection completed')
+            if subset is None or next_state != state:
+                core._atomic(state_file, (json.dumps(next_state, indent=2) + '\n').encode())
         except Exception:
-            for destination, old in reversed(written):
+            for destination, old, data in reversed(written):
+                if core._bytes(destination) != data:
+                    continue
                 if old is None:
                     destination.unlink()
                 else:
                     core._atomic(destination, old)
             raise
-    return {'selected_files': len(config['files']), 'changed_files': len(operations),
+    return {'selected_files': len(config['files']) if subset is None else len(subset), 'changed_files': len(operations),
             'mode': 'check' if check_only else 'collected',
             'source_write_count': 0}

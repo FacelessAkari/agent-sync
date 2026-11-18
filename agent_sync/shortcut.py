@@ -113,6 +113,7 @@ ATTENTION = {
     'selection_required': '尚需完成本机资料选择配置。',
     'bootstrap_required': '资料尚未准备完成。',
     'conflict': '资料存在冲突，尚未完成同步。',
+    'partial_sync': '待确认文件见私有资料库本机的 .agent-sync/conflicts/pending.json。',
     'conflicts': '资料存在冲突，尚未完成同步。',
     'remote_ahead': '远端资料有更新，尚未完成同步。',
     'remote_changed': '远端资料有更新，尚未完成同步。',
@@ -160,6 +161,10 @@ def _show_result(result):
     else:
         message = '需要处理：' + ATTENTION.get(status, '同步结果需要确认。')
     print(message)
+    if status == 'partial_sync':
+        print('已合并文件数：' + _count(document.get('resolved_files'))
+              + '；已上传文件数：' + _count(document.get('partial_push_files'))
+              + '；待确认文件数：' + _count(document.get('pending_files')))
     print('变更文件：' + _count(document.get('changed_files'))
           + '；新建归档：' + _count(document.get('archives_created'))
           + '；耗时：' + _elapsed(document.get('elapsed_seconds')))

@@ -480,6 +480,113 @@ class FastSyncTests(unittest.TestCase):
         self.assertEqual(old, self.snapshot())
         self.assertEqual(self.bare_head(), self.initial_head)
 
+    def enable_text_conflict(self):
+        from agent_sync.conflicts import policy
+        notices = mock.patch('agent_sync.review_notice.notify_pending', return_value='sent')
+        notices.start()
+        self.addCleanup(notices.stop)
+        policy(self.repo, 'codex')
+        left = b'local addition\ninitial rule\n'
+        right = b'initial rule\nremote addition\n'
+        self.rule.write_bytes(left)
+        (self.repo / 'data/rule.md').write_bytes(right)
+        return left, right
+
+    def test_local_codex_merge_uploads_even_when_a_skill_needs_review(self):
+        left, right = self.enable_text_conflict()
+        skill = self.repo / 'data/codex/demo/SKILL.md'
+        skill.write_bytes(b'pending skill install\n')
+        with mock.patch('agent_sync.conflict_codex.approve_merge',
+                        side_effect=lambda w, r, cases: {cases[0]['id']: True}) as reviewer:
+            result, code = self.invoke()
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result['status'], 'partial_sync')
+        self.assertTrue(result['uploaded'])
+        self.assertEqual(result['resolved_files'], 1)
+        self.assertEqual(result['pending_files'], 1)
+        reviewer.assert_called_once()
+        self.assertEqual(self.bare_bytes('data/rule.md'), left + b'remote addition\n')
+        self.assertEqual(self.rule.read_bytes(), self.bare_bytes('data/rule.md'))
+        self.assertEqual(self.bare_bytes('data/codex/demo/SKILL.md'), self.initial)
+        self.assertEqual(skill.read_bytes(), b'pending skill install\n')
+        decisions = list((self.repo / '.agent-sync/conflicts').glob('*/decision.json'))
+        self.assertEqual(len(decisions), 1)
+        backup = decisions[0].parent / core._json(decisions[0])['id']
+        self.assertEqual((backup / 'local').read_bytes(), left)
+        self.assertEqual((backup / 'repository').read_bytes(), right)
+
+    def test_decline_is_cached_and_check_never_calls_codex(self):
+        left, right = self.enable_text_conflict()
+        with mock.patch('agent_sync.conflict_codex.approve_merge',
+                        side_effect=lambda w, r, cases: {cases[0]['id']: False}) as reviewer:
+            old = self.snapshot()
+            self.assertEqual(self.invoke(check=True)[0]['status'], 'conflict')
+            self.assertEqual(old, self.snapshot())
+            reviewer.assert_not_called()
+            for attempt in range(2):
+                result, code = self.invoke()
+                self.assertEqual((code, result['status']), (2, 'partial_sync'), result)
+                self.assertFalse(result['uploaded'])
+            reviewer.assert_called_once()
+        self.assertEqual(self.rule.read_bytes(), left)
+        self.assertEqual((self.repo / 'data/rule.md').read_bytes(), right)
+
+    def test_interrupted_approved_write_resumes_without_duplicate_review(self):
+        self.enable_text_conflict()
+        target = self.repo / 'data/rule.md'
+        write = core._atomic
+        def interrupted(path, content):
+            if path == target:
+                raise OSError('injected interruption')
+            return write(path, content)
+        with mock.patch('agent_sync.conflict_codex.approve_merge',
+                        side_effect=lambda w, r, cases: {cases[0]['id']: True}) as reviewer:
+            with mock.patch.object(core, '_atomic', side_effect=interrupted):
+                result, code = self.invoke()
+                self.assertEqual((code, result['status']), (2, 'error'))
+            result, code = self.invoke()
+            self.assertEqual((code, result['status']), (0, 'synced'), result)
+            reviewer.assert_called_once()
+        self.assertEqual(self.bare_bytes('data/rule.md'), b'local addition\ninitial rule\nremote addition\n')
+
+    def test_unavailable_reviewer_does_not_block_an_independent_whole_skill(self):
+        left, right = self.enable_text_conflict()
+        for filename, data in [('SKILL.md', b'# Beta\n'), ('helper.py', b'value = 1\n')]:
+            source = self.root / 'originals' / filename
+            source.write_bytes(data)
+            self.selection['files'].append({'source': str(source), 'mirror': 'codex/beta/' + filename,
+                                            'reviewed_sha256': sha(data)})
+        core._save(self.root / 'selection.json', self.selection)
+        with mock.patch('agent_sync.conflict_codex.approve_merge', side_effect=core.Error('offline')):
+            result, code = self.invoke()
+        self.assertEqual((code, result['status']), (2, 'partial_sync'), result)
+        self.assertEqual(result['codex_failed_files'], 1)
+        self.assertEqual(result['partial_skill_files'], 2)
+        self.assertEqual(self.bare_bytes('data/codex/beta/SKILL.md'), b'# Beta\n')
+        self.assertEqual(self.bare_bytes('data/codex/beta/helper.py'), b'value = 1\n')
+        self.assertEqual(self.bare_bytes('data/rule.md'), b'initial rule\n')
+        self.assertEqual(self.rule.read_bytes(), left)
+        self.assertEqual((self.repo / 'data/rule.md').read_bytes(), right)
+
+    def test_two_devices_merge_when_other_device_has_already_pushed(self):
+        from agent_sync.conflicts import policy
+        policy(self.repo, 'codex')
+        self.rule.write_bytes(b'local addition\ninitial rule\n')
+        peer = self.base / 'other-device'
+        self.git(self.base, 'clone', str(self.bare), str(peer))
+        self.configure(peer)
+        (peer / 'data/rule.md').write_bytes(b'initial rule\nremote addition\n')
+        self.git(peer, 'add', '--', 'data/rule.md')
+        self.git(peer, 'commit', '-m', 'peer rule update')
+        self.git(peer, 'push', 'origin', 'main')
+        with mock.patch('agent_sync.conflict_codex.approve_merge',
+                        side_effect=lambda w, r, cases: {cases[0]['id']: True}) as reviewer:
+            result, code = self.invoke()
+        self.assertEqual((code, result['status']), (0, 'synced'), result)
+        self.assertTrue(result['received_remote'])
+        reviewer.assert_called_once()
+        self.assertEqual(self.bare_bytes('data/rule.md'), b'local addition\ninitial rule\nremote addition\n')
+
     def test_manual_mirror_edit_is_not_erased_by_collection(self):
         self.prime()
         self.source.write_bytes(b'new source\n')

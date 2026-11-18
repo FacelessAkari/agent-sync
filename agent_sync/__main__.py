@@ -51,6 +51,8 @@ def main(argv=None):
     apply = command(sub, "apply")
     apply.add_argument("--direction", required=True, choices=["push", "pull"])
     command(sub, "git-sync")
+    policy = command(sub, "conflict-policy", help="为本机资料库设置快捷和定时同步的冲突处理方式")
+    policy.add_argument("mode", choices=["status", "pending", "codex", "manual"])
     quick = command(sub, "quick-sync")
     quick.add_argument('--workspace', required=True)
     quick.add_argument('--check', action='store_true')
@@ -121,6 +123,15 @@ def main(argv=None):
             result = core.apply(args.repo, args.direction)
         elif args.command == "git-sync":
             result = git_sync(args.repo)
+        elif args.command == "conflict-policy":
+            from .conflicts import REASONS, policy
+            if args.mode == 'pending':
+                source = core._safe(core._abs(args.repo) / '.agent-sync/conflicts/pending.json')
+                rows = core._json(source)['files'] if source.exists() else []
+                result = {'files': [{**row, 'message': REASONS[row['reason']]} for row in rows],
+                          'count': len(rows)}
+            else:
+                result = {'mode': policy(args.repo, None if args.mode == 'status' else args.mode)}
         elif args.command == 'quick-sync':
             from .local_bridge import run
             result, code = run(args.workspace, args.repo, check=args.check)

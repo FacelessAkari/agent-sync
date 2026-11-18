@@ -22,6 +22,27 @@ python -B -m agent_sync schedule run --workspace ABS_WORKSPACE --repo ABS_PRIVAT
 
 安装时保存当前 Git 可执行文件的真实路径。定时运行会临时将它所在目录加入本进程的 `PATH`，结束后恢复；不修改系统 `PATH`，也不保存完整环境或凭证。这样不依赖终端启动配置。记录位置的 Git 缺失、不可执行、类型异常，或该文件及其任意祖先变为符号链接/junction/reparse point 时，同步停止并在本地记录原因；在可正常找到新 Git 的终端重新安装调度。状态查询和移除仍可使用。
 
+## 冲突处理
+
+在需要自动审阅的每台设备上启用一次。设备须能运行并登录原生 Codex CLI。策略保存在该资料库本机的 `.agent-sync/` 目录，默认值为 `manual`。
+
+```text
+python -B -m agent_sync --repo ABS_PRIVATE_REPO conflict-policy codex
+python -B -m agent_sync --repo ABS_PRIVATE_REPO conflict-policy status
+python -B -m agent_sync --repo ABS_PRIVATE_REPO conflict-policy pending
+python -B -m agent_sync --repo ABS_PRIVATE_REPO conflict-policy manual
+```
+
+例如，两台设备各给同一份规则文档新增了不同条款。程序先按上次同步的哈希找回原文，再生成保留两边改动的候选。发起同步设备上的 Codex CLI 使用其模型服务审阅原文、两端版本和候选，返回接受或待确认。程序在写入前重新核对文件、绑定和 Git 状态，把原文与合并结果保存在资料库本机的 `.agent-sync/conflicts/`。该目录不会上传。快捷入口的 `--check` 只检查文件，不启动审阅。
+
+自动合并覆盖直接绑定的规则、记忆和人设中的 UTF-8 Markdown 或纯文本。双方改写同一句话、缺少共同原文、输入超过限制或检测到常见凭证时，保留两份内容。一次最多审阅四个文件，Codex 暂不可用时留待下次重试。Codex 对相同版本给出的待确认决定会复用，两端内容变化后重新判断。审阅使用本机 CLI 自己的登录和账号级全局说明，在临时目录启动，不向模型提供工具。
+
+有文件待确认时，`partial_sync` 表示仍有工作要处理，退出码为 2。可独立处理的直接绑定文本，以及同一技能包所有已选文件均可安全上传的本机更新，会继续同步。共用同一原件的技能包一起判断；有冲突或需要安装远端版本的技能包保留在原处。可在调度结果中查看 `uploaded`、`resolved_files`、`partial_push_files` 和 `pending_files`。具体文件和原因见私有资料库本机的 `.agent-sync/conflicts/pending.json`。人工合并好对应文件后，再运行同步即可。
+
+有待确认文件时，发起同步的设备会向当前登录用户发送 Windows 或 macOS 系统通知。提醒只显示数量和查看方法，文件名和正文留在本机。同一批文件和版本只提醒一次，内容有变化会再次提醒。可在本机 Codex 中输入“查看 AgentSync 待确认清单”，或打开资料库的 `.agent-sync/conflicts/pending.txt`，查看每项原因和两份文件的位置。系统关闭通知或处于勿扰模式时，可直接查看这份清单。系统接受通知不能证明用户已看到。
+
+另一台设备先上传时，如果本机资料库工作副本干净，远端变化只是已有绑定的普通文件新增或修改，程序可先快进该副本，再审阅它与本机原件的改动。分叉、删除、结构化档案和清单变化交给人工核对。底层 `plan` 和 `apply` 保留手动处理流程。
+
 ## 路径和初始化边界
 
 三个目录必须两两完全独立，不能相等，也不能互为祖先或后代：

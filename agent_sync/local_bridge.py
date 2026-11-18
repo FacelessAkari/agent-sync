@@ -14,7 +14,7 @@ import re
 import stat
 import time
 
-from . import core, gitops, collector, private_remote, sources
+from . import core, gitops, collector, conflicts, private_remote, sources
 
 
 class Stop(Exception):
@@ -466,7 +466,17 @@ def prepare(root, repo, counters):
 def perform(root, repo, check, counters, guard):
     if core._safe(repo / '.agent-sync/lock').exists():
         stop('busy', '产品锁已存在；请等待现有操作结束。')
-    facts = git_gate(repo)
+    automatic = not check and conflicts.policy(repo) == 'codex'
+    try:
+        facts = git_gate(repo)
+    except Stop as exc:
+        if not automatic or exc.status != 'remote_changed':
+            raise
+        from .incoming import fast_forward
+        if not fast_forward(repo):
+            raise
+        facts = git_gate(repo)
+        counters['received_remote'] = True
     # Fail before refresh can write anything. Git status omits ignored untracked
     # data, so even a primed checkpoint must perform this live coverage check.
     data_files = core._scan_tree(repo / 'data')
@@ -485,11 +495,14 @@ def perform(root, repo, check, counters, guard):
         reader, root, repo, groups, bindings, baseline, hashes)
     counters['changed_files'] = sum(row['action'] not in {'unchanged', 'deleted-both'}
                                    for row in projected)
+    mirror_drift = set()
     for rel in hashes:
         old = state.get(rel)
         current = mirror.get(rel)
         if (old is not None and current != old) or (old is None and current not in (None, hashes[rel])):
-            stop('needs_skill_install_review', '镜像有独立修改或缺失；已保留，请先审阅技能安装。')
+            if not automatic:
+                stop('needs_skill_install_review', '镜像有独立修改或缺失；已保留，请先审阅技能安装。')
+            mirror_drift.add(rel)
     changed_sources = hashes != state
     # Include not-yet-created push targets, including projected collector output,
     # before either fast return or any collector/core.apply write.
@@ -505,13 +518,87 @@ def perform(root, repo, check, counters, guard):
     saved = reader.document(root / 'fast-sync-state.json', {})
     stable = facts['clean'] and matching and not changed_sources and mirror == hashes
     if stable and saved == {'version': 1, 'key': key}:
+        if automatic:
+            conflicts.pending(repo, [])
         return 'up_to_date', '全部内容与基线一致；快捷核对完成，未上传。'
 
     rows = full_plan(repo, check)
-    validate_rows(rows, mirror_groups)
-    validate_rows(projected, mirror_groups)
     from .records import validate_shared
     validate_shared(repo)
+    if automatic:
+        def before_write():
+            fresh = git_gate(repo)
+            if any(fresh[k] != facts[k] for k in ('head', 'remote', 'ref', 'upstream', 'config_sha256')):
+                stop('git_review_required', '审阅期间 Git 状态变化；请重新核对。')
+            if conflicts.policy(repo) != 'codex':
+                stop('needs_review', '本机自动合并已关闭。')
+
+        if any(r['action'] not in {'unchanged', 'deleted-both', 'push', 'pull', 'conflict'}
+               for r in rows + projected):
+            stop('review_required', '存在删除、孤立或未绑定项目；已保留供检查。')
+        reasons = conflicts.resolve(root, repo, rows, groups, bindings, snapshots, before_write, counters)
+        if counters['resolved_files']:
+            facts['clean'] = False
+            fresh_groups, fresh_bindings, baseline = core._load(repo)
+            if fresh_groups != groups or fresh_bindings != bindings:
+                stop('review_required', '审阅期间同步组或绑定变化；请重新核对。')
+            reader = Reader(counters)
+            if selection(reader, root, repo, groups, bindings) != (config, state, hashes, mirror_groups):
+                stop('changed_during_read', '审阅期间技能清单、收集状态或原件变化；请重新核对。')
+            fresh_mirror, snapshots, projected, matching = inspect_content(
+                reader, root, repo, groups, bindings, baseline, hashes)
+            if fresh_mirror != mirror:
+                stop('changed_during_read', '审阅期间技能镜像变化；请重新核对。')
+            rows = full_plan(repo, False)
+        waiting = {}
+        for row in rows + projected:
+            key_pair = row['group'], row['path']
+            if row['action'] == 'conflict':
+                waiting[key_pair] = reasons.get(key_pair, 'skill_conflict')
+            elif row['group'] in mirror_groups and row['action'] == 'pull':
+                waiting.setdefault(key_pair, 'skill_install')
+        for rel in mirror_drift:
+            for name in mirror_groups:
+                target = (root / 'skill-mirror' / rel)
+                if target.is_relative_to(bindings[name]):
+                    waiting[name, target.relative_to(bindings[name]).as_posix()] = 'skill_install'
+        sources_by_mirror = {item['mirror']: item['source'] for item in config['files']}
+        report = []
+        versions = []
+        for (name, relative), reason in sorted(waiting.items()):
+            material = [side.get(relative) for side in snapshots[name]]
+            source = core._target(Path(bindings[name]), relative)
+            if name in mirror_groups:
+                mapped = source.relative_to(root / 'skill-mirror').as_posix()
+                material.append(hashes.get(mapped))
+                source = sources_by_mirror.get(mapped, source)
+            report.append({'group': name, 'path': relative, 'reason': reason, 'local_file': str(source),
+                           'repository_file': str(core._target(repo / by_name[name]['path'], relative))})
+            versions.append(material)
+        counters['review_notice'] = conflicts.pending(repo, report, versions)
+        if report:
+            from . import partial_sync
+            from .skill_progress import collect_ready, validate_scope
+            counters['pending_files'] = len(report)
+            before_write()
+            ready = collect_ready(root, repo, config, state, hashes, mirror, groups, bindings,
+                                  snapshots, rows, projected, mirror_groups)
+            if ready:
+                fresh_groups, fresh_bindings, baseline = core._load(repo)
+                if fresh_groups != groups or fresh_bindings != bindings:
+                    stop('review_required', '收集期间同步组或绑定变化；请重新核对。')
+                reader = Reader(counters)
+                refreshed_config, _, hashes, fresh_mirror_groups = selection(reader, root, repo, groups, bindings)
+                if refreshed_config != config or fresh_mirror_groups != mirror_groups:
+                    stop('review_required', '收集期间技能映射变化；请重新核对。')
+                mirror, snapshots, _, _ = inspect_content(
+                    reader, root, repo, groups, bindings, baseline, hashes)
+                validate_scope(root, bindings, snapshots, mirror_groups, ready, hashes)
+            partial_sync.advance(repo, groups, bindings, snapshots, mirror_groups, guard, facts,
+                                 counters, skill_scope=ready)
+            stop('partial_sync', '独立的文本与技能包已核对；待处理文件列在 .agent-sync/conflicts/pending.json。')
+    validate_rows(rows, mirror_groups)
+    validate_rows(projected, mirror_groups)
     if stable and all(row['action'] == 'unchanged' for row in rows):
         if not check:
             core._save(root / 'fast-sync-state.json', {'version': 1, 'key': key})
@@ -559,7 +646,8 @@ def run(workspace, repo, check=False):
                 'uploaded': False, 'source_write_count': 0,
                 'changed_files': 0, 'direct_pull_files': 0,
                 'archives_created': 0, 'archives_unchanged': 0,
-                'archives_checked': False}
+                'archives_checked': False, 'resolved_files': 0, 'pending_files': 0,
+                'partial_push_files': 0, 'codex_failed_files': 0}
     code = 0
     try:
         root, repo = core._abs(workspace), core._abs(repo)

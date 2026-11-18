@@ -1,13 +1,26 @@
 import json
 import os
+from contextvars import ContextVar
 from pathlib import Path
 import subprocess
+import tempfile
 
 from . import core, private_remote
 
 
+_temporary_index = ContextVar("agent_sync_temporary_index", default=None)
+
+
+class UploadedPendingLocal(core.Error):
+    def __init__(self, paths):
+        super().__init__("远端已接收部分提交，本机分支或索引仍需核对")
+        self.paths = paths
+
+
 def _git(repo, args, label, allowed=(0,)):
     env = private_remote.git_environment()
+    if _temporary_index.get() is not None:
+        env['GIT_INDEX_FILE'] = str(_temporary_index.get())
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args], shell=False,
@@ -135,7 +148,79 @@ def _git_path(repo, name):
     return path if path.is_absolute() else repo / path
 
 
-def git_sync(repo):
+def _selected_files(repo, paths):
+    """Pin the exact ordinary files eligible for a partial commit."""
+    if isinstance(paths, (str, bytes)):
+        raise core.Error("部分提交需要明确的数据文件清单")
+    selected = {}
+    for name in paths:
+        core._data_path(name)
+        if any(name.startswith(root + "/") for root in core.MANAGED_SHARED):
+            raise core.Error("结构化记录必须整批提交")
+        raw = core._bytes(repo / name)
+        value = core._digest(raw)
+        if value is None or (isinstance(paths, dict) and paths[name] != value):
+            raise core.Error("部分提交目标已变化或已删除")
+        selected[name] = value
+    return selected
+
+
+def _push_selected(repo, selected, original, branch, remote, ref, target, options):
+    # Build the candidate without changing the user's index or branch. A rejected
+    # push can then be retried without first cleaning an AgentSync staging area.
+    def check_local():
+        if (_text(repo, ['symbolic-ref', '--quiet', 'HEAD'], '检查部分提交分支') != 'refs/heads/' + branch
+                or _text(repo, ['rev-parse', 'HEAD'], '核对部分提交起点') != original
+                or _git(repo, ['diff', '--cached', '--quiet', '--exit-code'], '核对用户暂存区', (0, 1)).returncode
+                or _git(repo, ['diff', '--quiet', 'HEAD', '--', 'manifest.json'], '核对用户清单', (0, 1)).returncode):
+            raise core.Error("部分提交期间本机分支、清单或暂存区发生变化")
+
+    check_local()
+    with tempfile.TemporaryDirectory(dir=repo / '.agent-sync', prefix='partial-index-') as temporary:
+        token = _temporary_index.set(Path(temporary) / 'index')
+        try:
+            _git(repo, ['read-tree', original], '初始化部分提交的临时索引')
+            names = sorted(selected)
+            for offset in range(0, len(names), 64):
+                _git(repo, ['--literal-pathspecs', 'add', '--', *names[offset:offset + 64]], '暂存选定的文件')
+            changed = _paths(repo, ['diff', '--cached', '--no-renames', '--name-only', '-z', original],
+                             '核对临时索引的文件')
+            if not set(changed).issubset(selected):
+                raise core.Error("临时索引含本次范围之外的文件")
+            for path in names:
+                if core._digest(_git(repo, ['show', ':' + path], '核对部分提交文件内容').stdout) != selected[path]:
+                    raise core.Error("部分提交的文件已变化")
+            if not changed:
+                return {'status': 'unchanged', 'visibility': target['visibility'], 'files': 0}
+            tree = _text(repo, ['write-tree'], '生成部分提交树')
+            commit = _text(repo, options + ['commit-tree', tree, '-p', original, '-m',
+                                            'AgentSync: sync selected files'], '生成部分提交')
+        finally:
+            _temporary_index.reset(token)
+    check_local()
+    private_remote.require_private(repo, remote, expected=target)
+    head = _text(repo, ['ls-remote', '--exit-code', '--refs', remote, ref], '核对部分提交远端')
+    if head.split() != [original, ref]:
+        raise core.Error("远端已变化，停止部分上传")
+    try:
+        _git(repo, ['push', '--', remote, commit + ':' + ref], '非强制 push 部分文件')
+    except core.Error:
+        # A broken connection may lose the acknowledgement of a successful push.
+        if _text(repo, ['ls-remote', '--exit-code', '--refs', remote, ref], '核对上传回执').split() != [commit, ref]:
+            raise
+    # Advance our branch only after the server accepted the exact candidate.
+    # A two-tree index merge preserves unrelated worktree edits. No checkout.
+    try:
+        check_local()
+        _git(repo, ['read-tree', '-i', '-m', original, commit], '更新已上传文件的本机索引')
+        _git(repo, options + ['update-ref', '-m', 'AgentSync partial push', 'refs/heads/' + branch, commit, original],
+             '将本机分支推进到已上传的提交')
+    except (OSError, core.Error) as exc:
+        raise UploadedPendingLocal(changed) from exc
+    return {'status': 'pushed', 'visibility': target['visibility'], 'files': len(changed), 'paths': changed}
+
+
+def git_sync(repo, paths=None, *, expected_head=None):
     from .records import validate_shared
 
     repo = core._safe(repo)
@@ -147,7 +232,9 @@ def git_sync(repo):
         root = core._abs(_text(repo, ["rev-parse", "--show-toplevel"], "确认内容仓库根目录"))
         if root != repo:
             raise core.Error("--repo 必须恰好是 Git 工作树根目录，不能借用上级代码仓库")
-        _git(repo, ["rev-parse", "--verify", "HEAD"], "要求用户先完成 bootstrap 提交")
+        original_head = _text(repo, ["rev-parse", "--verify", "HEAD"], "要求用户先完成 bootstrap 提交")
+        if expected_head is not None and original_head != expected_head:
+            raise core.Error("部分提交前 HEAD 已变化")
         branch = _text(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"], "拒绝 detached HEAD")
         for marker in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"):
             if _git_path(repo, marker).exists():
@@ -161,6 +248,9 @@ def git_sync(repo):
         dirty = _paths(repo, ["diff", "--name-only", "-z", "HEAD", "--"], "检查工作树")
         if any(not _allowed(path) for path in dirty):
             raise core.Error("存在非白名单已跟踪改动；仅允许 manifest.json 和 data/")
+        selected = None if paths is None else _selected_files(repo, paths)
+        if selected is not None and "manifest.json" in dirty:
+            raise core.Error("manifest 有本机修改，不能部分提交")
         _validate_names(dirty)
         _stageable(repo, {"manifest.json"} | {"data/" + p for p in data_files})
         ignored = _git(repo, ["check-ignore", "--no-index", "-q", ".agent-sync/device.json"], "确认本地状态被忽略", (0, 1))
@@ -172,10 +262,14 @@ def git_sync(repo):
         if (not upstream.startswith("refs/remotes/") or not remote or remote.startswith("-")
                 or remote == "." or not merge_ref.startswith("refs/heads/") or "\n" in merge_ref):
             raise core.Error("首版仅支持标准命名 remote 和远端分支 upstream")
+        if selected is not None and original_head != _text(repo, ["rev-parse", upstream], "核对部分提交起点"):
+            raise core.Error("本机 HEAD 和 upstream 不一致，不能部分提交")
         # Validate existing history too; tracked state must never become a transfer candidate.
         _tree(repo, "HEAD")
         private_remote.require_private(repo, remote, expected=target)
         _git(repo, ["fetch", "--", remote], "fetch upstream")
+        if selected is not None and original_head != _text(repo, ["rev-parse", upstream], "确认远端未前进"):
+            raise core.Error("远端发生变化，不能部分提交")
         _tree(repo, upstream)
         different = _paths(repo, ["diff", "--name-only", "-z", "HEAD", upstream, "--"], "检查远端修改范围")
         if any(not _allowed(path) for path in different):
@@ -186,12 +280,14 @@ def git_sync(repo):
         if any(hooks.iterdir()):
             raise core.Error("本地 disabled-hooks 目录必须为空")
         options = ["-c", "core.hooksPath=" + str(hooks), "-c", "commit.gpgsign=false"]
-        candidates = sorted({"manifest.json"}
-                            | {"data/" + p for p in core._scan_tree(repo / "data")}
+        candidates = sorted(selected if selected is not None else
+                            {"manifest.json"} | {"data/" + p for p in core._scan_tree(repo / "data")}
                             | {p for p in tracked if p.startswith("data/")})
         _validate_names(candidates)
         _stageable(repo, candidates)
         _byte_rules(repo, candidates)
+        if selected is not None:
+            return _push_selected(repo, selected, original_head, branch, remote, merge_ref, target, options)
         # Never stage a whole directory: ignored scan entries cannot become Git input,
         # even if local exclude configuration is changed between checks.
         for offset in range(0, len(candidates), 64):

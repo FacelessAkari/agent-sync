@@ -962,7 +962,7 @@ def _summary(raw, code):
     # No raw messages, paths, filenames, stderr, tokens or exception strings enter
     # scheduler telemetry. Counts and a small fixed status vocabulary are enough.
     allowed = {"success", "ok", "synced", "unchanged", "applied", "needs_review", "conflict", "failed", "error",
-               "up_to_date", "checked", "changes_pending", "remote_changed", "needs_skill_install_review", "busy"}
+               "up_to_date", "checked", "changes_pending", "remote_changed", "needs_skill_install_review", "busy", "partial_sync"}
     status = raw.get("status")
     if not isinstance(status, str) or status not in allowed:
         status = "success" if code == 0 else "needs_review"
@@ -970,7 +970,8 @@ def _summary(raw, code):
         status = "needs_review"
     result = {"status": status, "message": "同步完成。" if code == 0 else "同步需要检查；保留冲突或失败状态，未强制覆盖。"}
     for key in ("source_files", "unique_source_reads", "elapsed_seconds", "uploaded",
-                "source_write_count", "changed_files", "direct_pull_files"):
+                "source_write_count", "changed_files", "direct_pull_files", "resolved_files",
+                "pending_files", "partial_push_files", "partial_skill_files", "codex_failed_files", "received_remote"):
         value = raw.get(key)
         if isinstance(value, (list, tuple, dict)):
             result[key + "_count"] = len(value)
@@ -978,6 +979,10 @@ def _summary(raw, code):
             result[key] = value
         elif type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 10**15:
             result[key] = value
+    if status == 'partial_sync':
+        result['message'] = '已核对可独立同步的文本和技能包；待处理文件见本机 .agent-sync/conflicts/pending.json。'
+    if raw.get('review_notice') in ('sent', 'unchanged', 'unavailable', 'clear'):
+        result['review_notice'] = raw['review_notice']
     return result
 
 
