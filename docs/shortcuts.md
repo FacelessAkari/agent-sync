@@ -22,7 +22,7 @@ python -m agent_sync --repo "CONTENT" shortcut --workspace "LOCAL"
 
 Mac 使用 `python3`。程序自动选择当前系统，也可用 `--platform windows` 或 `--platform macos` 明确目标。默认入口放入本机工作区的 `launchers` 目录；用 `--output "绝对输出目录"` 可以指定桌面等位置。
 
-输出目录不得占用工作区的 `selection.json`、`collection-state.json`、`fast-sync-state.json`、`quick-sync.lock`、`sources.json`、`sources-state.json`、`skill-mirror` 或 `schedule`，也不能是这些位置的祖先或子路径。默认 `LOCAL/launchers` 与外部桌面目录均可使用。
+输出目录不得占用工作区的 `selection.json`、`skill-discovery.json`、`collection-state.json`、`fast-sync-state.json`、`quick-sync.lock`、`sources.json`、`sources-state.json`、`skill-mirror` 或 `schedule`，也不能是这些位置的祖先或子路径。默认 `LOCAL/launchers` 与外部桌面目录均可使用。
 
 Windows 入口使用本机 Python 和 Git，提供可双击的启动文件及快捷方式；Mac 入口是可执行的 `.command` 文件。生成器不覆盖内容不同的现有文件，重新运行时会先检查目标。更新 Python、Git 或程序目录后应重新核对生成入口。
 
@@ -62,7 +62,29 @@ python -m agent_sync --repo "CONTENT" quick-sync --workspace "LOCAL" --check
 
 `source` 指当前设备的真实文件路径；`mirror` 位于工作区 `skill-mirror` 下，以 `codex`、`shared` 或 `antigravity` 开头。将相应技能同步组绑定到该普通镜像目录。原始技能可以是经过检查的普通硬链接，镜像必须是独立普通文件；junction 或符号链接必须由用户先确认真实来源，程序不自动跟随。
 
-清单、收集基线和快速核对状态仅属于当前设备。新增技能文件需要审阅后加入清单。远端技能更新进入镜像后，需要核对并安装到助手实际技能目录，不能把旧原件直接盖回新镜像。
+清单、收集基线和快速核对状态仅属于当前设备。已有技能包新增文件时，在清单中登记这些文件。远端技能需要核对并安装到助手实际技能目录。
+
+### 自动登记新增技能
+
+在工作区创建 `skill-discovery.json`，逐个指定允许同步的本机技能目录和目标命名空间。目标需要已有相应的技能树绑定。
+
+```json
+{
+  "version": 1,
+  "roots": [
+    {
+      "directory": "/absolute/local/skills",
+      "namespace": "codex",
+      "include": ["example-skill"]
+    }
+  ]
+}
+```
+
+- `directory` 的直接子目录中包含普通 `SKILL.md` 的目录可以作为一个技能包。`namespace` 取 `codex`、`shared` 或 `antigravity`。
+- `include` 可指定技能目录名。省略时，该目录下符合条件的所有新技能包都在自动同步范围内。用专门的技能目录或限定名称来控制哪些内容进入私有资料仓库。
+- 快捷和定时同步都会检查这个配置。新技能包中符合 AgentSync 文件规则的文档、脚本和资源按当次内容登记。隐藏文件、链接、缓存、输出目录和不支持的文件类型会跳过。已登记的技能包继续使用现有文件映射。
+- 使用快捷入口的 `--check` 可以预览。输出中的 `discovered_skill_files` 是新发现的文件数。实际运行把这些映射追加到本机 `selection.json`，再由现有冲突检查和同步流程处理。
 
 ## 私有资料校验
 

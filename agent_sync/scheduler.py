@@ -971,6 +971,7 @@ def _summary(raw, code):
     result = {"status": status, "message": "同步完成。" if code == 0 else "同步需要检查；保留冲突或失败状态，未强制覆盖。"}
     for key in ("source_files", "unique_source_reads", "elapsed_seconds", "uploaded",
                 "source_write_count", "changed_files", "direct_pull_files", "resolved_files",
+                "discovered_skill_files",
                 "pending_files", "partial_push_files", "partial_skill_files", "codex_failed_files", "received_remote"):
         value = raw.get(key)
         if isinstance(value, (list, tuple, dict)):

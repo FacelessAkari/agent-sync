@@ -81,7 +81,7 @@ def create(workspace, repo, platform='auto', output=None):
     # Reject both ancestors and descendants before reading state or creating
     # anything (including Windows link temporary files).
     controls = [core._safe(workspace / name) for name in (
-        'selection.json', 'collection-state.json', 'fast-sync-state.json',
+        'selection.json', 'collection-state.json', 'fast-sync-state.json', 'skill-discovery.json',
         'quick-sync.lock', 'sources.json', 'sources-state.json',
         'skill-mirror', 'schedule',
     )]

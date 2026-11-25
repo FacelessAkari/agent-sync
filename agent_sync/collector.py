@@ -1,8 +1,8 @@
 """Collect an explicitly reviewed file list into ordinary, byte-preserving copies.
 
 This adapter only reads original skill files, including ordinary hardlinks. It
-never follows reparse points or writes back through source files. New files must
-be reviewed and added to selection.json explicitly.
+never follows reparse points or writes back through source files. The caller
+supplies the exact authorized selection and its first-collection digests.
 """
 import hashlib
 import json

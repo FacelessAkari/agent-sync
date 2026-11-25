@@ -135,6 +135,58 @@ class FastSyncTests(unittest.TestCase):
                 result[file.relative_to(self.base).as_posix()] = file.read_bytes()
         return result
 
+    def test_discovery_previews_and_syncs_only_new_authorized_package(self):
+        skills = self.base / 'skills'
+        for name in ('new-skill', 'unselected', 'demo'):
+            package = skills / name
+            package.mkdir(parents=True)
+            (package / 'SKILL.md').write_bytes(b'# Test skill\n')
+        package = skills / 'new-skill'
+        for directory, filename in (
+                ('scripts', 'example.py'), ('references', 'usage.md'),
+                ('cache', 'snapshot.json'), ('outputs', 'example.md')):
+            (package / directory).mkdir()
+            (package / directory / filename).write_bytes(b'fixture\n')
+        (package / '.skillmeta.yaml').write_bytes(b'local metadata\n')
+        (package / 'archive.zip').write_bytes(b'unsupported\n')
+        core._save(self.root / 'skill-discovery.json', {
+            'version': 1, 'roots': [{
+                'directory': str(skills), 'namespace': 'codex', 'include': ['new-skill', 'demo'],
+            }],
+        })
+        before = self.snapshot()
+        result, code = self.invoke(check=True)
+        self.assertEqual((result['status'], code), ('changes_pending', 0), result)
+        self.assertEqual(result['discovered_skill_files'], 3)
+        self.assertEqual(self.snapshot(), before)
+
+        result, code = self.invoke()
+        self.assertEqual((result['status'], code), ('synced', 0), result)
+        self.assertTrue(result['uploaded'])
+        self.assertEqual(result['discovered_skill_files'], 3)
+        config = core._json(self.root / 'selection.json')
+        self.assertEqual(config['files'][:2], self.selection['files'])
+        self.assertEqual(
+            {item['mirror'] for item in config['files'][2:]},
+            {'codex/new-skill/SKILL.md', 'codex/new-skill/scripts/example.py',
+             'codex/new-skill/references/usage.md'},
+        )
+        self.assertEqual(self.bare_bytes('data/codex/new-skill/SKILL.md'), b'# Test skill\n')
+        self.assertEqual(self.bare_bytes('data/codex/demo/SKILL.md'), self.initial)
+        result, code = self.invoke()
+        self.assertEqual((result['status'], code), ('up_to_date', 0), result)
+        self.assertEqual(result['discovered_skill_files'], 0)
+        self.assertEqual(core._json(self.root / 'selection.json'), config)
+
+    def test_discovery_rejects_scanning_sync_workspace(self):
+        core._save(self.root / 'skill-discovery.json', {
+            'version': 1, 'roots': [{'directory': str(self.root), 'namespace': 'codex'}],
+        })
+        before = self.snapshot()
+        result, code = self.invoke(check=True)
+        self.assertEqual((result['status'], code), ('error', 2), result)
+        self.assertEqual(self.snapshot(), before)
+
     def test_existing_workspace_lock_is_busy_and_preserved(self):
         lock = self.root / 'quick-sync.lock'
         lock.write_bytes(b'existing owner\n')

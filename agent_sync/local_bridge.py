@@ -14,7 +14,7 @@ import re
 import stat
 import time
 
-from . import core, gitops, collector, conflicts, private_remote, sources
+from . import core, gitops, collector, conflicts, private_remote, skill_discovery, sources
 
 
 class Stop(Exception):
@@ -302,20 +302,31 @@ def git_gate(repo):
             'clean': not bool(status)}
 
 
-def selection(reader, root, repo, groups, bindings):
+def selection(reader, root, repo, groups, bindings, *, discover=False):
     config = reader.document(root / 'selection.json', {'version': 1, 'files': []})
     state = reader.document(root / 'collection-state.json', {})
     if (not isinstance(config, dict) or set(config) != {'version', 'files'}
             or type(config['version']) is not int or config['version'] != 1
             or not isinstance(config['files'], list) or not isinstance(state, dict)):
         stop('invalid_input', 'selection 或 collection-state 格式错误。')
+    mirror = root / 'skill-mirror'
+    if discover:
+        discovery = reader.document(root / skill_discovery.CONFIG_NAME, {'version': 1, 'roots': []})
+        bound_trees = [Path(bindings[g['name']]) for g in groups
+                       if g['category'] == 'skills' and g['kind'] == 'tree'
+                       and g['name'] in bindings]
+        protected_roots = [root, repo, *private_remote.source_roots(), *map(Path, bindings.values())]
+        added = skill_discovery.discover(
+            discovery, config['files'], protected_roots, mirror, bound_trees, reader.read)
+        if added:
+            config = {'version': 1, 'files': config['files'] + added}
+        reader.counters['discovered_skill_files'] = len(added)
     if not config['files']:
         if any(g['category'] == 'skills' and g['name'] in bindings for g in groups):
             stop('selection_required', '技能绑定尚无本机已审阅映射；请配置 workspace/selection.json，未接入或扫描原技能。')
         if any(g['name'] in bindings and g['category'] not in {'rules', 'personas', 'memory'}
                for g in groups):
             stop('review_required', '无选择映射时仅支持 rules/personas/memory 直接绑定。')
-    mirror = root / 'skill-mirror'
     selected, originals = {}, []
     for item in config['files']:
         if (not isinstance(item, dict) or set(item) != {'source', 'mirror', 'reviewed_sha256'}
@@ -331,7 +342,8 @@ def selection(reader, root, repo, groups, bindings):
         if not source.is_absolute() or '..' in source.parts:
             stop('invalid_input', '原技能必须使用明确的绝对路径。')
         protected = [repo, mirror, root / 'selection.json', root / 'collection-state.json',
-                     root / 'fast-sync-state.json', root / 'quick-sync.lock']
+                     root / 'fast-sync-state.json', root / 'quick-sync.lock',
+                     root / skill_discovery.CONFIG_NAME]
         protected += private_remote.source_roots()
         protected += [Path(bindings[g['name']]) for g in groups if g['name'] in bindings]
         if any(core._overlap(source, target) for target in protected):
@@ -361,7 +373,7 @@ def selection(reader, root, repo, groups, bindings):
                 stop('unsafe_path', '镜像路径只能作为技能绑定。')
             mirror_groups.add(name)
         for control in ('selection.json', 'collection-state.json', 'fast-sync-state.json',
-                        'quick-sync.lock'):
+                        'quick-sync.lock', skill_discovery.CONFIG_NAME):
             if core._overlap(bound, root / control):
                 stop('unsafe_path', '内容绑定与本机控制文件重叠。')
     for rel in selected:
@@ -421,7 +433,7 @@ def validate_rows(rows, mirror_groups):
 
 
 def checkpoint_key(reader, root, repo, facts):
-    paths = [root / 'selection.json', root / 'collection-state.json',
+    paths = [root / 'selection.json', root / 'collection-state.json', root / skill_discovery.CONFIG_NAME,
              repo / 'manifest.json', repo / '.agent-sync/device.json',
              repo / '.agent-sync/baseline.json', repo / '.gitignore', repo / '.gitattributes']
     paths += [gitops._git_path(repo, name) for name in ('info/attributes', 'info/exclude')]
@@ -490,7 +502,10 @@ def perform(root, repo, check, counters, guard):
             facts['clean'] = False
     reader = Reader(counters)
     groups, bindings, baseline = core._load(repo)
-    config, state, hashes, mirror_groups = selection(reader, root, repo, groups, bindings)
+    selection_path = root / 'selection.json'
+    original_selection = reader.read(selection_path)
+    config, state, hashes, mirror_groups = selection(
+        reader, root, repo, groups, bindings, discover=True)
     mirror, snapshots, projected, matching = inspect_content(
         reader, root, repo, groups, bindings, baseline, hashes)
     counters['changed_files'] = sum(row['action'] not in {'unchanged', 'deleted-both'}
@@ -514,6 +529,11 @@ def perform(root, repo, check, counters, guard):
             candidates.add(group['path'] if group['kind'] == 'file'
                            else group['path'] + '/' + row['path'])
     gitops._stageable(repo, candidates)
+    if counters['discovered_skill_files'] and not check:
+        if core._bytes(selection_path) != original_selection:
+            stop('changed_during_read', '发现技能期间选择清单变化；请重试。')
+        core._save(selection_path, config)
+        reader.copies.pop(str(selection_path), None)
     key = checkpoint_key(reader, root, repo, facts)
     saved = reader.document(root / 'fast-sync-state.json', {})
     stable = facts['clean'] and matching and not changed_sources and mirror == hashes
@@ -644,7 +664,7 @@ def run(workspace, repo, check=False):
     started = time.perf_counter()
     counters = {'source_files': 0, 'unique_source_reads': 0,
                 'uploaded': False, 'source_write_count': 0,
-                'changed_files': 0, 'direct_pull_files': 0,
+                'changed_files': 0, 'direct_pull_files': 0, 'discovered_skill_files': 0,
                 'archives_created': 0, 'archives_unchanged': 0,
                 'archives_checked': False, 'resolved_files': 0, 'pending_files': 0,
                 'partial_push_files': 0, 'codex_failed_files': 0}
